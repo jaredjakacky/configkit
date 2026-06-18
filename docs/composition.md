@@ -46,15 +46,52 @@ Workerkit owns:
 - failure policy
 - runtime and worker inspection
 
-The root `configkit` package does not import or compile against Servekit,
-Workerkit, or OpenTelemetry. Optional adapter packages connect the kits where
-the integration is common operational plumbing. Those adapter packages live in
-this same Go module, so their dependencies may appear in `go.mod`; applications
-only compile adapter packages they import.
+The root `configkit` package imports Opskit because `Manager[T]` directly
+implements Opskit component, readiness, and inspection contracts. It does not
+import or compile against Servekit, Workerkit, or OpenTelemetry. Optional
+adapter packages connect the kits where the integration is common operational
+plumbing. Those adapter packages live in this same Go module, so their
+dependencies may appear in `go.mod`; applications only compile adapter packages
+they import.
 
-## Read-Only Operations with Servekit
+## Opskit-First Servekit Composition
 
-Use `configkit/opshttp` when operators need HTTP inspection:
+For Kit Series services, register the Configkit manager with Opskit and let
+Servekit consume the registry:
+
+```go
+ops := opskit.NewRegistry()
+
+manager := configkit.NewManager[AppConfig](
+	configkit.WithIdentity("config"),
+)
+
+ops.MustRegister(manager, opskit.Required())
+
+server := servekit.New(
+	servekit.WithOps(ops, servekit.WithOpsAdmin()),
+)
+```
+
+Servekit readiness now includes Configkit readiness through Opskit. When admin
+routes are enabled, `/admin/components/config` exposes the manager's Opskit
+component snapshot.
+
+Default Configkit readiness policy:
+
+- `unloaded`: not ready
+- `failed`: not ready
+- `loaded`: ready
+- `degraded`: ready
+
+`degraded` is ready by default because a valid last-known-good snapshot remains
+active. Use `configkit.WithDegradedReady(false)` when constructing the manager
+for stricter services.
+
+## Specialized Configkit HTTP Inspection
+
+Use `configkit/opshttp` when operators need Configkit-specific HTTP inspection
+in addition to, or instead of, generic Opskit component snapshots:
 
 ```go
 err := opshttp.Mount(server, manager,
@@ -64,7 +101,7 @@ err := opshttp.Mount(server, manager,
 )
 ```
 
-Default routes:
+Default specialized routes:
 
 - `GET /admin/config`
 - `GET /admin/config/attempts`
@@ -72,29 +109,18 @@ Default routes:
 The routes are read-only. They do not expose typed config values and they do not
 trigger reloads.
 
-Read-only does not mean public. Inspection and attempts can include metadata,
+Read-only does not mean public. LifecycleInspection and attempts can include metadata,
 revisions, checksums, redacted values, and error strings. Protect them with
 Servekit endpoint policy when needed.
 
-## Readiness with Servekit
-
-Use `opshttp.ReadinessCheck` to connect Configkit status to Servekit readiness:
+`opshttp.ReadinessCheck` remains available as standalone Servekit support for
+services that are not using an Opskit registry:
 
 ```go
 server := servekit.New(
 	servekit.WithReadinessChecks(opshttp.ReadinessCheck(manager)),
 )
 ```
-
-Default policy:
-
-- `unloaded`: not ready
-- `failed`: not ready
-- `loaded`: ready
-- `degraded`: ready
-
-`degraded` is ready by default because a valid last-known-good snapshot remains
-active. Use `opshttp.WithDegradedReady(false)` for stricter services.
 
 ## Reload Commands with Workerkit
 
@@ -108,6 +134,10 @@ err := runtime.Register(workerkit.WorkerSpec{
 	configworker.ReloadCommand(manager, source, pipeline),
 ))
 ```
+
+Workerkit v0.2.0 runtimes implement Opskit component, readiness, and inspection
+contracts directly. Register the runtime in the same Opskit registry as the
+Configkit manager, then keep `configkit/worker` focused on the reload command.
 
 Default command name:
 
@@ -130,10 +160,11 @@ state without treating every failed reload as a Workerkit dispatch failure.
 A typical composed service has:
 
 - Configkit manager for typed config
+- Opskit registry containing the Configkit manager and Workerkit runtime
 - Servekit server for app routes, admin routes, auth, response encoding, and readiness
 - Workerkit runtime for operational commands
-- `opshttp.Mount` for read-only Configkit inspection
-- `opshttp.ReadinessCheck` for readiness
+- `servekit.WithOps` for shared readiness and generic component inspection
+- optional `opshttp.Mount` for read-only Configkit-specific inspection
 - `worker.ReloadCommand` for reload
 - app routes that read current config through `manager.Value()`
 
@@ -141,6 +172,7 @@ This keeps the ownership clear:
 
 - application code owns the config type and business behavior
 - Configkit owns config lifecycle mechanics
+- Opskit owns shared operational registry shape
 - Servekit owns HTTP policy
 - Workerkit owns command dispatch
 

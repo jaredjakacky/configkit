@@ -155,8 +155,8 @@ steps. Recovered panics become load errors with the appropriate failed stage.
 Observer panics are also recovered by the manager. Observers should still return
 quickly because they run synchronously unless wrapped by `AsyncObserver`.
 Synchronous observers must not call `Load`, `LoadFromSource`, or `Apply` on the
-same manager that emitted the event. Read-only calls such as `Status`,
-`Inspect`, `Snapshot`, and `Value` are acceptable. Use `AsyncObserver` or
+same manager that emitted the event. Read-only calls such as `LifecycleStatus`,
+`LifecycleInspection`, `Snapshot`, and `Value` are acceptable. Use `AsyncObserver` or
 another goroutine for follow-up work that may block or trigger lifecycle
 operations.
 

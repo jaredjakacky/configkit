@@ -113,7 +113,7 @@ func TestReloadCommandSuccessfulReloadPayload(t *testing.T) {
 	if payload.AttemptStatus != configkit.AttemptStatusSucceeded {
 		t.Fatalf("attempt status = %q, want succeeded", payload.AttemptStatus)
 	}
-	if payload.ManagerState != configkit.StatusStateLoaded {
+	if payload.ManagerState != configkit.LifecycleStateLoaded {
 		t.Fatalf("manager state = %q, want loaded", payload.ManagerState)
 	}
 	if !payload.Published {
@@ -162,7 +162,7 @@ func TestReloadCommandFailedReloadReturnsResultWithoutCommandError(t *testing.T)
 	if payload.AttemptStatus != configkit.AttemptStatusFailed {
 		t.Fatalf("attempt status = %q, want failed", payload.AttemptStatus)
 	}
-	if payload.ManagerState != configkit.StatusStateDegraded {
+	if payload.ManagerState != configkit.LifecycleStateDegraded {
 		t.Fatalf("manager state = %q, want degraded", payload.ManagerState)
 	}
 	if payload.Published {
@@ -208,7 +208,7 @@ func TestReloadCommandValidationFailureReturnsResultWithoutCommandError(t *testi
 	if payload.AttemptStatus != configkit.AttemptStatusFailed {
 		t.Fatalf("attempt status = %q, want failed", payload.AttemptStatus)
 	}
-	if payload.ManagerState != configkit.StatusStateDegraded {
+	if payload.ManagerState != configkit.LifecycleStateDegraded {
 		t.Fatalf("manager state = %q, want degraded", payload.ManagerState)
 	}
 	if payload.Published {
@@ -228,6 +228,43 @@ func TestReloadCommandValidationFailureReturnsResultWithoutCommandError(t *testi
 	}
 }
 
+func TestReloadCommandDoesNotExposeLifecyclePanicPayload(t *testing.T) {
+	const secret = "postgres://user:pass@example/db"
+	manager := configkit.NewManager[reloadTestConfig]()
+	source := configkit.NewBytesSource(
+		[]byte(`{"name":"api","enabled":true,"port":8080}`),
+		configkit.SourceMetadata{Name: "memory", Kind: "memory"},
+		"rev-1",
+	)
+	pipeline := reloadTestPipeline()
+	pipeline.ValidateConfig = func(ctx context.Context, cfg reloadTestConfig) error {
+		panic(errors.New(secret))
+	}
+	spec := ckworker.ReloadCommand(manager, source, pipeline)
+
+	result, err := spec.Handler.HandleCommand(context.Background(), workerkit.CommandRequest{Name: spec.Name})
+	if err != nil {
+		t.Fatalf("command error = %v, want nil", err)
+	}
+	if result.Message != "config reload failed" {
+		t.Fatalf("message = %q, want failure message", result.Message)
+	}
+
+	payload := decodeReloadPayload(t, result.Payload)
+	if payload.AttemptStatus != configkit.AttemptStatusFailed {
+		t.Fatalf("attempt status = %q, want failed", payload.AttemptStatus)
+	}
+	if strings.Contains(string(result.Payload), secret) {
+		t.Fatalf("command payload = %s, must not contain %q", result.Payload, secret)
+	}
+	if strings.Contains(payload.Error, secret) {
+		t.Fatalf("payload error = %q, must not contain %q", payload.Error, secret)
+	}
+	if payload.Error != "validate config panicked" {
+		t.Fatalf("payload error = %q, want safe panic message", payload.Error)
+	}
+}
+
 func TestReloadCommandMissingSourceReturnsFailurePayload(t *testing.T) {
 	manager := configkit.NewManager[reloadTestConfig]()
 	spec := ckworker.ReloadCommand(manager, nil, reloadTestPipeline())
@@ -240,7 +277,7 @@ func TestReloadCommandMissingSourceReturnsFailurePayload(t *testing.T) {
 	if payload.AttemptStatus != configkit.AttemptStatusFailed {
 		t.Fatalf("attempt status = %q, want failed", payload.AttemptStatus)
 	}
-	if payload.ManagerState != configkit.StatusStateFailed {
+	if payload.ManagerState != configkit.LifecycleStateFailed {
 		t.Fatalf("manager state = %q, want failed", payload.ManagerState)
 	}
 	if !strings.Contains(payload.Error, configkit.ErrMissingSource.Error()) {
@@ -305,14 +342,14 @@ func reloadTestPipeline() configkit.Pipeline[reloadTestConfig] {
 }
 
 type reloadResultPayload struct {
-	AttemptID       uint64                  `json:"attempt_id,omitempty"`
-	AttemptStatus   configkit.AttemptStatus `json:"attempt_status"`
-	ManagerState    configkit.StatusState   `json:"manager_state"`
-	Published       bool                    `json:"published"`
-	Changed         bool                    `json:"changed"`
-	CurrentChecksum string                  `json:"current_checksum,omitempty"`
-	CurrentRevision string                  `json:"current_revision,omitempty"`
-	Error           string                  `json:"error,omitempty"`
+	AttemptID       uint64                   `json:"attempt_id,omitempty"`
+	AttemptStatus   configkit.AttemptStatus  `json:"attempt_status"`
+	ManagerState    configkit.LifecycleState `json:"manager_state"`
+	Published       bool                     `json:"published"`
+	Changed         bool                     `json:"changed"`
+	CurrentChecksum string                   `json:"current_checksum,omitempty"`
+	CurrentRevision string                   `json:"current_revision,omitempty"`
+	Error           string                   `json:"error,omitempty"`
 }
 
 func decodeReloadPayload(t *testing.T, data []byte) reloadResultPayload {

@@ -74,7 +74,7 @@ func main() {
 	}
 
 	fmt.Printf("config: %+v\n", cfg)
-	fmt.Printf("state: %s\n", manager.Status().State)
+	fmt.Printf("state: %s\n", manager.LifecycleStatus().State)
 	fmt.Printf("checksum: %s\n", result.Apply.Current.Checksum)
 }
 ```
@@ -98,8 +98,10 @@ both the load result and apply result.
 
 ## What You Get Without Adapters
 
-The root `configkit` package does not import or compile against Servekit,
-Workerkit, OpenTelemetry, HTTP, Kubernetes, or a remote configuration backend.
+The root `configkit` package imports Opskit because `Manager[T]` directly
+implements Opskit operational contracts. It does not import or compile against
+Servekit, Workerkit, OpenTelemetry, HTTP, Kubernetes, or a remote configuration
+backend.
 
 You can directly:
 
@@ -116,7 +118,8 @@ You can directly:
 Servekit, Workerkit, and OpenTelemetry integrations are optional adapter
 packages in this same Go module. Their dependencies may appear in `go.mod`
 because they are part of this repository, but applications only compile adapter
-packages they import.
+packages they import. For Kit Series services, register the manager with an
+Opskit registry and pass that registry to Servekit.
 
 ## Next Steps
 

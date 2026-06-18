@@ -11,6 +11,7 @@ import (
 
 	configkit "github.com/jaredjakacky/configkit"
 	opshttp "github.com/jaredjakacky/configkit/opshttp"
+	opskit "github.com/jaredjakacky/opskit"
 	servekit "github.com/jaredjakacky/servekit"
 )
 
@@ -40,9 +41,9 @@ func TestMountRegistersInspectionRoute(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body = %s", status, body)
 	}
-	var inspection configkit.Inspection
+	var inspection configkit.LifecycleInspection
 	decodeOpsTestPayload(t, body, &inspection)
-	if inspection.Status.State != configkit.StatusStateLoaded {
+	if inspection.Status.State != configkit.LifecycleStateLoaded {
 		t.Fatalf("inspection state = %q, want loaded", inspection.Status.State)
 	}
 	if got := inspection.Redacted["name"]; got != "api" {
@@ -70,6 +71,47 @@ func TestMountRegistersAttemptsRouteWhenAvailable(t *testing.T) {
 	if attempts[0].Status != configkit.AttemptStatusSucceeded {
 		t.Fatalf("attempt status = %q, want succeeded", attempts[0].Status)
 	}
+}
+
+func TestMountDoesNotExposeLifecyclePanicPayload(t *testing.T) {
+	const secret = "secret-token"
+	manager := configkit.NewManager[opsTestConfig]()
+	source := configkit.NewBytesSource(
+		[]byte(`{"name":"api"}`),
+		configkit.SourceMetadata{Name: "memory", Kind: "memory"},
+		"rev-1",
+	)
+	_, err := manager.LoadFromSource(context.Background(), configkit.AttemptKindReload, source, configkit.Pipeline[opsTestConfig]{
+		Decode: configkit.JSONDecoder[opsTestConfig](),
+		ValidateConfig: func(ctx context.Context, value opsTestConfig) error {
+			panic(secret)
+		},
+		Redact:   configkit.EmptyRedactor[opsTestConfig](),
+		Checksum: configkit.SHA256JSONChecksum[opsTestConfig](),
+	})
+	if err == nil {
+		t.Fatal("load panic error = nil, want error")
+	}
+	if !errors.Is(err, configkit.ErrLifecyclePanicked) {
+		t.Fatalf("load panic error = %v, want configkit.ErrLifecyclePanicked", err)
+	}
+
+	server := newOpsTestServer()
+	if err := opshttp.Mount(server, manager); err != nil {
+		t.Fatalf("mount: %v", err)
+	}
+
+	body, status := getOpsTestRoute(t, server, "/admin/config")
+	if status != http.StatusOK {
+		t.Fatalf("inspection status = %d, want 200; body = %s", status, body)
+	}
+	assertOpsStringOmits(t, "inspection response body", body, secret)
+
+	body, status = getOpsTestRoute(t, server, "/admin/config/attempts")
+	if status != http.StatusOK {
+		t.Fatalf("attempts status = %d, want 200; body = %s", status, body)
+	}
+	assertOpsStringOmits(t, "attempts response body", body, secret)
 }
 
 func TestMountSkipsAttemptsRouteWhenUnavailable(t *testing.T) {
@@ -164,18 +206,17 @@ func TestOptionsValidatePathPrefix(t *testing.T) {
 func TestReadinessCheckStates(t *testing.T) {
 	tests := []struct {
 		name    string
-		state   configkit.StatusState
+		ready   bool
+		reason  string
 		wantErr bool
 	}{
-		{name: "unloaded", state: configkit.StatusStateUnloaded, wantErr: true},
-		{name: "failed", state: configkit.StatusStateFailed, wantErr: true},
-		{name: "loaded", state: configkit.StatusStateLoaded},
-		{name: "degraded", state: configkit.StatusStateDegraded},
+		{name: "not ready", ready: false, reason: "config not loaded", wantErr: true},
+		{name: "ready", ready: true, reason: "config loaded"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := opshttp.ReadinessCheck(statusProvider{state: tt.state})(context.Background())
+			err := opshttp.ReadinessCheck(readinessProvider{ready: tt.ready, reason: tt.reason})(context.Background())
 			if tt.wantErr && err == nil {
 				t.Fatal("readiness error = nil, want error")
 			}
@@ -186,8 +227,19 @@ func TestReadinessCheckStates(t *testing.T) {
 	}
 }
 
-func TestReadinessCheckWithDegradedReadyFalse(t *testing.T) {
-	err := opshttp.ReadinessCheck(statusProvider{state: configkit.StatusStateDegraded}, opshttp.WithDegradedReady(false))(context.Background())
+func TestReadinessCheckUsesCoreDegradedReadyPolicy(t *testing.T) {
+	manager := newOpsTestManager(t, configkit.WithDegradedReady(false))
+	failingSource := configkit.NewBytesSource(
+		[]byte(`{"name":`),
+		configkit.SourceMetadata{Name: "memory", Kind: "memory"},
+		"rev-2",
+	)
+	_, loadErr := manager.LoadFromSource(context.Background(), configkit.AttemptKindReload, failingSource, opsTestPipeline())
+	if loadErr == nil {
+		t.Fatal("reload error = nil, want failure")
+	}
+
+	err := opshttp.ReadinessCheck(manager)(context.Background())
 	if err == nil {
 		t.Fatal("readiness error = nil, want degraded not ready")
 	}
@@ -207,7 +259,7 @@ func TestReadinessCheckContextError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := opshttp.ReadinessCheck(statusProvider{state: configkit.StatusStateLoaded})(ctx)
+	err := opshttp.ReadinessCheck(readinessProvider{ready: true})(ctx)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("readiness error = %v, want context.Canceled", err)
 	}
@@ -215,40 +267,45 @@ func TestReadinessCheckContextError(t *testing.T) {
 
 type staticInspector struct{}
 
-func (staticInspector) Inspect() configkit.Inspection {
-	return configkit.Inspection{
-		Status: configkit.Status{State: configkit.StatusStateLoaded},
+func (staticInspector) LifecycleInspection() configkit.LifecycleInspection {
+	return configkit.LifecycleInspection{
+		Status: configkit.LifecycleStatus{State: configkit.LifecycleStateLoaded},
 	}
 }
 
-type statusProvider struct {
-	state configkit.StatusState
+type readinessProvider struct {
+	ready  bool
+	reason string
 }
 
-func (p statusProvider) Status() configkit.Status {
-	return configkit.Status{State: p.state}
+func (p readinessProvider) Readiness(context.Context) opskit.Readiness {
+	return opskit.Readiness{Ready: p.ready, Reason: p.reason}
 }
 
-func newOpsTestManager(t *testing.T) *configkit.Manager[opsTestConfig] {
+func newOpsTestManager(t *testing.T, opts ...configkit.ManagerOption) *configkit.Manager[opsTestConfig] {
 	t.Helper()
 
-	manager := configkit.NewManager[opsTestConfig]()
+	manager := configkit.NewManager[opsTestConfig](opts...)
 	source := configkit.NewBytesSource(
 		[]byte(`{"name":"api"}`),
 		configkit.SourceMetadata{Name: "memory", Kind: "memory"},
 		"rev-1",
 	)
-	_, err := manager.LoadFromSource(context.Background(), configkit.AttemptKindInitialLoad, source, configkit.Pipeline[opsTestConfig]{
+	_, err := manager.LoadFromSource(context.Background(), configkit.AttemptKindInitialLoad, source, opsTestPipeline())
+	if err != nil {
+		t.Fatalf("load test manager: %v", err)
+	}
+	return manager
+}
+
+func opsTestPipeline() configkit.Pipeline[opsTestConfig] {
+	return configkit.Pipeline[opsTestConfig]{
 		Decode: configkit.JSONDecoder[opsTestConfig](),
 		Redact: func(ctx context.Context, value opsTestConfig) (configkit.RedactedView, error) {
 			return configkit.RedactedView{"name": value.Name}, nil
 		},
 		Checksum: configkit.SHA256JSONChecksum[opsTestConfig](),
-	})
-	if err != nil {
-		t.Fatalf("load test manager: %v", err)
 	}
-	return manager
 }
 
 func newOpsTestServer() *servekit.Server {
@@ -275,5 +332,13 @@ func decodeOpsTestPayload[T any](t *testing.T, body string, out *T) {
 
 	if err := json.Unmarshal([]byte(body), out); err != nil {
 		t.Fatalf("decode response %q: %v", body, err)
+	}
+}
+
+func assertOpsStringOmits(t *testing.T, label string, value string, secret string) {
+	t.Helper()
+
+	if strings.Contains(value, secret) {
+		t.Fatalf("%s = %q, must not contain %q", label, value, secret)
 	}
 }

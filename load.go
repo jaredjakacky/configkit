@@ -7,6 +7,14 @@ import (
 	"time"
 )
 
+// ErrLifecyclePanicked is returned when Configkit recovers a panic from a
+// source or pipeline lifecycle step.
+//
+// The recovered panic value is intentionally not exposed through Error or
+// Unwrap because it may contain secrets, raw config, or arbitrary application
+// data.
+var ErrLifecyclePanicked = errors.New("configkit: lifecycle panicked")
+
 // LoadResult describes the result of one configuration load attempt.
 //
 // A successful load produces a Snapshot and a successful AttemptRecord.
@@ -302,30 +310,19 @@ func pipelineStageError(prefix string, err error) error {
 }
 
 type lifecyclePanicError struct {
-	prefix string
-	value  any
-	err    error
+	message string
 }
 
-func newLifecyclePanicError(prefix string, recovered any) error {
-	if err, ok := recovered.(error); ok {
-		return &lifecyclePanicError{
-			prefix: prefix,
-			value:  recovered,
-			err:    err,
-		}
-	}
-
+func newLifecyclePanicError(prefix string, _ any) error {
 	return &lifecyclePanicError{
-		prefix: prefix,
-		value:  recovered,
+		message: prefix + " panicked",
 	}
 }
 
 func (e *lifecyclePanicError) Error() string {
-	return fmt.Sprintf("%s panic: %v", e.prefix, e.value)
+	return e.message
 }
 
 func (e *lifecyclePanicError) Unwrap() error {
-	return e.err
+	return ErrLifecyclePanicked
 }

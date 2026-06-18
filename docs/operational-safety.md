@@ -12,8 +12,8 @@ audience.
 
 Configkit does not expose typed config values through:
 
-- `Status`
-- `Inspection`
+- `LifecycleStatus`
+- `LifecycleInspection`
 - observer events
 - `SlogObserver`
 - the OpenTelemetry observer
@@ -116,7 +116,13 @@ source names may increase cardinality and may expose caller-provided metadata.
 
 Load error strings may be recorded on failed spans.
 
-## Ops HTTP
+## Opskit and Ops HTTP
+
+`Manager[T]` implements Opskit status, readiness, and inspection. Opskit status
+attributes are intentionally low-cardinality and do not include source names,
+revisions, checksums, errors, file paths, tenant IDs, or redacted config
+values. Opskit inspection can include lifecycle summaries, retained attempts,
+last apply results, and redacted config values chosen by the application.
 
 `configkit/opshttp` exposes read-only operational state through Servekit.
 
@@ -154,7 +160,7 @@ inspect the command result.
 
 ## Future Operational Endpoints
 
-Any future HTTP or administrative endpoint exposing `Status`, `Inspection`,
+Any future HTTP or administrative endpoint exposing `LifecycleStatus`, `LifecycleInspection`,
 attempts, or reload results should be protected by the service's routing,
 authentication, authorization, and audit policy.
 

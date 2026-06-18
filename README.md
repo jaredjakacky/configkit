@@ -190,7 +190,7 @@ func main() {
 	)
 
 	fmt.Printf("status=%s checksum=%s\n",
-		manager.Status().State,
+		manager.LifecycleStatus().State,
 		result.Apply.Current.Checksum,
 	)
 }
@@ -217,12 +217,13 @@ contains the typed config, source/checksum metadata, and a safe redacted
 inspection view. Failed loads and reloads do not produce snapshots.
 
 `Manager[T]` owns the current last-known-good snapshot, records attempts,
-exposes status and inspection, and preserves the current snapshot when a later
-reload fails. Most services should start with `Manager.LoadFromSource`.
+exposes lifecycle and Opskit operational views, and preserves the current
+snapshot when a later reload fails. Most services should start with
+`Manager.LoadFromSource`.
 
-`Status` and `Inspection` are operational views. They do not expose the typed
-config value. `Provider[T]` and `Inspector` are read-only composition seams for
-application code and operational adapters.
+`LifecycleStatus` and `LifecycleInspection` are operational views. They do not expose the typed
+config value. `LifecycleProvider[T]` and `LifecycleInspector` are read-only
+composition seams for application code and operational adapters.
 
 Observers receive `load_started`, `load_succeeded`, `load_failed`, and
 `snapshot_applied` events for logs, telemetry, diagnostics, and lightweight
@@ -275,7 +276,7 @@ if _, err := manager.LoadFromSource(ctx, configkit.AttemptKindReload, invalidSou
 	fmt.Printf("reload failed: %v\n", err)
 }
 
-status := manager.Status()
+status := manager.LifecycleStatus()
 fmt.Println(status.State) // degraded
 
 cfg, _ := manager.Value()
@@ -286,9 +287,9 @@ This is the main reason Configkit is a lifecycle package, not just a parser.
 
 ## Safe inspection and redaction
 
-Configkit does not expose typed config values through `Status`, `Inspection`, `SlogObserver`, `opshttp`, or the OpenTelemetry observer.
+Configkit does not expose typed config values through `LifecycleStatus`, `LifecycleInspection`, `SlogObserver`, `opshttp`, or the OpenTelemetry observer.
 
-Inspection uses the application-provided `Redactor[T]`.
+LifecycleInspection uses the application-provided `Redactor[T]`.
 
 ```go
 Redact: func(ctx context.Context, cfg AppConfig) (configkit.RedactedView, error) {
@@ -306,19 +307,35 @@ Redaction is application-owned. Configkit cannot know which values are safe for 
 
 Operational output may still include source metadata, revisions, checksums, attempt stages, validation errors, source read errors, and redacted values chosen by the application. Do not put secrets in those fields. Checksums are operational fingerprints, not secrecy mechanisms, and can leak information for low-entropy or known config sets.
 
-## Servekit operations adapter
+## Opskit and Servekit composition
 
-Configkit core is transport-neutral. It does not define HTTP routes.
-
-For services that use [Servekit](https://github.com/jaredjakacky/servekit), the optional `opshttp` package mounts read-only Configkit operational routes.
-This is package-level optional: applications only compile it when they import
-`configkit/opshttp`.
+Configkit core is transport-neutral, but `Manager[T]` implements Opskit's
+component, readiness, and inspection contracts. For Kit Series services, the
+primary Servekit composition path is to register the manager with an Opskit
+registry and give that registry to Servekit.
 
 ```go
-server := servekit.New(
-	servekit.WithReadinessChecks(opshttp.ReadinessCheck(manager)),
+ops := opskit.NewRegistry()
+
+manager := configkit.NewManager[AppConfig](
+	configkit.WithIdentity("config"),
 )
 
+ops.MustRegister(manager, opskit.Required())
+
+server := servekit.New(
+	servekit.WithOps(ops, servekit.WithOpsAdmin()),
+)
+```
+
+Servekit's `/readyz` includes the registered Configkit readiness, and
+`/admin/components/config` exposes the manager's Opskit component snapshot when
+`servekit.WithOpsAdmin()` is enabled.
+
+The optional `configkit/opshttp` package remains useful when operators need a
+Configkit-specific HTTP view:
+
+```go
 err := opshttp.Mount(server, manager,
 	opshttp.WithEndpointOptions(servekit.WithAuthGate(requireAdmin)),
 )
@@ -327,9 +344,10 @@ if err != nil {
 }
 ```
 
-By default, `opshttp.Mount` exposes `GET /admin/config` for `configkit.Inspection` and `GET /admin/config/attempts` for recent attempts when available.
+By default, `opshttp.Mount` exposes `GET /admin/config` for `configkit.LifecycleInspection` and `GET /admin/config/attempts` for recent attempts when available.
 
-`opshttp.ReadinessCheck` adapts Configkit status into Servekit readiness. `unloaded` and `failed` are not ready. `loaded` is ready. `degraded` is ready by default because a valid last-known-good snapshot remains active. Stricter services can use `opshttp.WithDegradedReady(false)`.
+`opshttp.ReadinessCheck` is standalone Servekit support for services that are
+not using an Opskit registry. It follows the manager's core readiness policy.
 
 Operational routes can expose metadata, revisions, checksums, redacted values, and error strings. Protect them with Servekit endpoint options appropriate for the deployment.
 
@@ -380,7 +398,7 @@ manager := configkit.NewManager[AppConfig](
 Observers run synchronously by default and should return quickly. A synchronous
 observer must not call `Load`, `LoadFromSource`, or `Apply` on the same manager
 that emitted the event, because that creates reentrant lifecycle behavior and
-can deadlock. Read-only calls such as `Status`, `Inspect`, `Snapshot`, and
+can deadlock. Read-only calls such as `LifecycleStatus`, `LifecycleInspection`, `Snapshot`, and
 `Value` are acceptable.
 
 Use `AsyncObserver` when an observer may block:
@@ -427,9 +445,14 @@ data, or typed config values.
 
 Configkit is the typed configuration lifecycle shell in the Kit Series.
 
-Servekit owns inbound HTTP routing, request policy, auth gates, response encoding, readiness endpoints, and HTTP lifecycle. Workerkit owns background runtime, commands, reload triggers, scheduling, retries, concurrency, and worker lifecycle. Configkit owns source reads, decoding, defaults, validation, redaction, checksums, snapshots, status, inspection, reload bookkeeping, and observer events.
+Servekit owns inbound HTTP routing, request policy, auth gates, response encoding, readiness endpoints, and HTTP lifecycle. Opskit owns shared operational registry views. Workerkit owns background runtime, commands, reload triggers, scheduling, retries, concurrency, and worker lifecycle. Configkit owns source reads, decoding, defaults, validation, redaction, checksums, snapshots, status, inspection, reload bookkeeping, and observer events.
 
-The adapters preserve those boundaries. `configkit/opshttp` connects Configkit inspection and readiness to Servekit. `configkit/worker` connects Configkit reloads to Workerkit commands.
+The primary composition path is Configkit manager to Opskit registry to
+Servekit. In services with Workerkit v0.2.0 or newer, register the Workerkit
+runtime in that same Opskit registry. The
+optional adapters preserve narrower boundaries: `configkit/opshttp` exposes
+Configkit-specific inspection routes, and `configkit/worker` connects Configkit
+reloads to Workerkit commands.
 
 Core packages stay independently useful. Adapter packages snap them together when the operational integration is common enough to avoid repeating glue code in every service.
 

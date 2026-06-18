@@ -48,9 +48,9 @@ func main() {
 		log.Fatal(err)
 	}
 
-	status := manager.Status()
-	if status.State != configkit.StatusStateLoaded {
-		log.Fatalf("manager state = %s, want %s", status.State, configkit.StatusStateLoaded)
+	status := manager.LifecycleStatus()
+	if status.State != configkit.LifecycleStateLoaded {
+		log.Fatalf("manager state = %s, want %s", status.State, configkit.LifecycleStateLoaded)
 	}
 
 	current, ok := manager.Value()

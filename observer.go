@@ -46,7 +46,7 @@ type Event struct {
 //
 // A synchronous observer must not call Load, LoadFromSource, or Apply on the
 // same Manager that emitted the event. That creates reentrant lifecycle behavior
-// and can deadlock. Read-only calls such as Status, Inspect, Snapshot, and Value
-// are acceptable. Use AsyncObserver or hand work off to another goroutine for
-// follow-up lifecycle work.
+// and can deadlock. Read-only calls such as LifecycleStatus,
+// LifecycleInspection, Snapshot, and Value are acceptable. Use AsyncObserver or
+// hand work off to another goroutine for follow-up lifecycle work.
 type Observer func(ctx context.Context, event Event)

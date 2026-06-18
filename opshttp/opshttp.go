@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	configkit "github.com/jaredjakacky/configkit"
+	opskit "github.com/jaredjakacky/opskit"
 	servekit "github.com/jaredjakacky/servekit"
 )
 
@@ -18,7 +19,7 @@ var (
 	// ErrMissingServer is returned when Mount is called without a Servekit server.
 	ErrMissingServer = errors.New("configkit/opshttp: missing server")
 
-	// ErrMissingInspector is returned when Mount is called without a Configkit inspector.
+	// ErrMissingInspector is returned when Mount is called without a Configkit lifecycle inspector.
 	ErrMissingInspector = errors.New("configkit/opshttp: missing inspector")
 )
 
@@ -61,9 +62,9 @@ func WithEndpointOptions(opts ...servekit.EndpointOption) Option {
 // Mount registers read-only Configkit operational endpoints on server.
 //
 // Mount always registers GET /admin/config by default, returning
-// configkit.Inspection. If inspector also implements AttemptProvider, Mount
+// configkit.LifecycleInspection. If inspector also implements AttemptProvider, Mount
 // registers GET /admin/config/attempts, returning recent attempt records.
-func Mount(server *servekit.Server, inspector configkit.Inspector, opts ...Option) error {
+func Mount(server *servekit.Server, inspector configkit.LifecycleInspector, opts ...Option) error {
 	if server == nil {
 		return ErrMissingServer
 	}
@@ -83,7 +84,7 @@ func Mount(server *servekit.Server, inspector configkit.Inspector, opts ...Optio
 
 	endpointOptions := append([]servekit.EndpointOption(nil), options.endpointOptions...)
 	server.Handle(http.MethodGet, options.pathPrefix, func(r *http.Request) (any, error) {
-		return inspector.Inspect(), nil
+		return inspector.LifecycleInspection(), nil
 	}, endpointOptions...)
 
 	attempts, ok := inspector.(AttemptProvider)
@@ -123,42 +124,15 @@ func (o options) validate() error {
 	return nil
 }
 
-// ReadinessProvider exposes Configkit status for readiness checks.
+// ReadinessProvider exposes Configkit readiness for readiness checks.
 type ReadinessProvider interface {
-	Status() configkit.Status
+	Readiness(context.Context) opskit.Readiness
 }
 
-// ReadinessOption configures Configkit readiness behavior.
-type ReadinessOption func(*readinessOptions)
-
-type readinessOptions struct {
-	degradedReady bool
-}
-
-// WithDegradedReady configures whether degraded Configkit state is ready.
+// ReadinessCheck adapts Configkit readiness into a Servekit readiness check.
 //
-// The default is true because degraded means a valid last-known-good snapshot
-// remains active after a failed later attempt.
-func WithDegradedReady(ready bool) ReadinessOption {
-	return func(options *readinessOptions) {
-		options.degradedReady = ready
-	}
-}
-
-// ReadinessCheck adapts Configkit status into a Servekit readiness check.
-//
-// By default, loaded and degraded states are ready, while unloaded and failed
-// states are not ready.
-func ReadinessCheck(provider ReadinessProvider, opts ...ReadinessOption) servekit.ReadinessCheck {
-	options := readinessOptions{
-		degradedReady: true,
-	}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&options)
-		}
-	}
-
+// Readiness follows the provider's core Configkit readiness policy.
+func ReadinessCheck(provider ReadinessProvider) servekit.ReadinessCheck {
 	return func(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -167,16 +141,14 @@ func ReadinessCheck(provider ReadinessProvider, opts ...ReadinessOption) serveki
 			return errors.New("configkit/opshttp: readiness provider missing")
 		}
 
-		state := provider.Status().State
-		switch state {
-		case configkit.StatusStateLoaded:
+		readiness := provider.Readiness(ctx)
+		if readiness.Ready {
 			return nil
-		case configkit.StatusStateDegraded:
-			if options.degradedReady {
-				return nil
-			}
+		}
+		if readiness.Reason != "" {
+			return fmt.Errorf("configkit/opshttp: config not ready: %s", readiness.Reason)
 		}
 
-		return fmt.Errorf("configkit/opshttp: config not ready: %s", state)
+		return errors.New("configkit/opshttp: config not ready")
 	}
 }

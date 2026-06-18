@@ -9,7 +9,7 @@ import (
 	"net/http/httptest"
 
 	configkit "github.com/jaredjakacky/configkit"
-	opshttp "github.com/jaredjakacky/configkit/opshttp"
+	opskit "github.com/jaredjakacky/opskit"
 	servekit "github.com/jaredjakacky/servekit"
 )
 
@@ -20,8 +20,11 @@ type AppConfig struct {
 
 func main() {
 	ctx := context.Background()
-	manager := configkit.NewManager[AppConfig]()
-	server := servekit.New(servekit.WithReadinessChecks(opshttp.ReadinessCheck(manager)))
+	ops := opskit.NewRegistry()
+	manager := configkit.NewManager[AppConfig](configkit.WithIdentity("config"))
+	ops.MustRegister(manager, opskit.Required())
+
+	server := servekit.New(servekit.WithOps(ops, servekit.WithOpsAdmin()))
 	server.SetReady(true)
 
 	pipeline := configkit.Pipeline[AppConfig]{
@@ -64,11 +67,19 @@ func main() {
 	fmt.Printf("after failed reload with last-known-good: %s\n", readyzStatus(server))
 
 	// Degraded is ready by default because a valid last-known-good snapshot is
-	// still active. Use WithDegradedReady(false) for stricter services.
-	strictCheck := opshttp.ReadinessCheck(manager, opshttp.WithDegradedReady(false))
-	if err := strictCheck(ctx); err != nil {
-		fmt.Printf("strict degraded readiness: not ready (%v)\n", err)
+	// still active. Use configkit.WithDegradedReady(false) for stricter services.
+	strictManager := configkit.NewManager[AppConfig](configkit.WithDegradedReady(false))
+	strictOps := opskit.NewRegistry()
+	strictOps.MustRegister(strictManager, opskit.Required())
+	strictServer := servekit.New(servekit.WithOps(strictOps))
+	strictServer.SetReady(true)
+	if _, err := strictManager.LoadFromSource(ctx, configkit.AttemptKindInitialLoad, validSource, pipeline); err != nil {
+		log.Fatalf("strict initial load: %v", err)
 	}
+	if _, err := strictManager.LoadFromSource(ctx, configkit.AttemptKindReload, invalidSource, pipeline); err == nil {
+		log.Fatal("strict reload error = nil, want validation error")
+	}
+	fmt.Printf("strict degraded readiness: %s\n", readyzStatus(strictServer))
 }
 
 func readyzStatus(server *servekit.Server) string {
