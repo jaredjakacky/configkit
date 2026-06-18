@@ -131,7 +131,10 @@ type ReadinessProvider interface {
 
 // ReadinessCheck adapts Configkit readiness into a Servekit readiness check.
 //
-// Readiness follows the provider's core Configkit readiness policy.
+// For composed Kit Series services, prefer registering Manager with an Opskit
+// registry and passing that registry to Servekit with servekit.WithOps.
+// ReadinessCheck remains useful for standalone Servekit services that are not
+// using Opskit.
 func ReadinessCheck(provider ReadinessProvider) servekit.ReadinessCheck {
 	return func(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {

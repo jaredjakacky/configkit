@@ -398,12 +398,16 @@ configuration into a framework.
 
 - `WithIdentity(name string)`
 
-  Sets the manager's Opskit component name. The default is `config`.
+  Sets the manager's Opskit component name. The default is `config`. Non-empty
+  names should satisfy Opskit component-name rules; invalid names may fail when
+  the manager is registered with an Opskit registry.
 
 - `WithComponentInfo(info opskit.ComponentInfo)`
 
   Sets the manager's Opskit component identity. Empty fields fall back to
-  Configkit defaults.
+  Configkit defaults. Non-empty component names should satisfy Opskit
+  component-name rules; invalid names may fail when the manager is registered
+  with an Opskit registry.
 
 - `WithDegradedReady(ready bool)`
 
@@ -832,6 +836,59 @@ this repository's `go.mod`.
   degraded lifecycle state not ready. The default is `true` because
   degraded means the last-known-good snapshot remains active.
 
+### Opskit reload command
+
+- `ReloadCommand[T](manager, source, pipeline, opts...)`
+
+  Creates an Opskit component that implements `opskit.CommandHandler` and
+  `opskit.CommandDescriber` for Configkit reload.
+
+  Default component name: `config-reload`
+
+  Default command name: `config/reload`
+
+  The command calls
+  `manager.LoadFromSource(ctx, configkit.AttemptKindReload, source, pipeline)`.
+  Completed reload failures are returned as completed Opskit command results
+  with failure metadata. Context cancellation and deadline failures are returned
+  as failed command results with no result payload.
+
+- `ReloadCommandResult`
+
+  Safe operational result payload for reload commands.
+
+  Fields:
+
+  - `attempt_id`
+  - `attempt_status`
+  - `manager_state`
+  - `published`
+  - `changed`
+  - `current_checksum`
+  - `current_revision`
+  - `error`
+
+  The payload does not expose typed config values or redacted inspection output.
+  Revisions, checksums, and error strings are still operationally visible and
+  should be safe for the command audience.
+
+- `ReloadCommandOption`
+
+  Reload command configuration hook.
+
+- `WithReloadCommandName(name string)`
+
+  Sets the Opskit command name. Empty names preserve the default.
+
+- `WithReloadCommandDescription(description string)`
+
+  Sets the command discovery description.
+
+- `WithReloadCommandComponentInfo(info opskit.ComponentInfo)`
+
+  Sets the Opskit component identity for the reload command handler. Empty
+  fields fall back to Configkit defaults.
+
 ## Package `worker`
 
 The `worker` package adapts Configkit reloads into Workerkit commands. It is
@@ -846,8 +903,8 @@ the Workerkit runtime itself in Opskit for readiness and generic inspection;
 
 - `ReloadCommand[T](manager, source, pipeline, opts...)`
 
-  Creates a Workerkit command spec that calls
-  `manager.LoadFromSource(ctx, configkit.AttemptKindReload, source, pipeline)`.
+  Creates a Workerkit command spec backed by the root Configkit Opskit reload
+  command.
 
   Default command name: `config/reload`
 

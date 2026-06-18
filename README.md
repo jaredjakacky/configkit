@@ -351,6 +351,29 @@ not using an Opskit registry. It follows the manager's core readiness policy.
 
 Operational routes can expose metadata, revisions, checksums, redacted values, and error strings. Protect them with Servekit endpoint options appropriate for the deployment.
 
+## Opskit reload command
+
+Configkit exposes reload as an Opskit command handler in the root package:
+
+```go
+reload := configkit.ReloadCommand(manager, source, pipeline,
+	configkit.WithReloadCommandName("config/reload"),
+	configkit.WithReloadCommandDescription("reloads Configkit configuration from source"),
+)
+
+ops.MustRegister(reload, opskit.Informational())
+```
+
+The command descriptor defaults to `config/reload`. Completed reload failures
+are returned as completed Opskit command results with failure metadata because
+Configkit preserves last-known-good state. Context cancellation and deadline
+failures are returned as failed command results with no result payload.
+
+The result payload is `configkit.ReloadCommandResult`. It does not include typed
+config values or redacted inspection output. It may include attempt status,
+manager state, revision, checksum, and sanitized error strings, so those values
+should be safe for the command audience.
+
 ## Workerkit reload command adapter
 
 Configkit core does not poll, watch files, schedule reloads, or expose HTTP reload routes.
