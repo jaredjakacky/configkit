@@ -85,7 +85,7 @@ func runReloadCommand[T any](ctx context.Context, manager *configkit.Manager[T],
 		return workerkit.CommandResult{}, loadErr
 	}
 
-	status := manager.Status()
+	status := manager.LifecycleStatus()
 
 	payload, err := json.Marshal(reloadCommandPayload(result, status, loadErr))
 	if err != nil {
@@ -104,17 +104,17 @@ func isCommandContextError(err error) bool {
 }
 
 type reloadResultPayload struct {
-	AttemptID       uint64                  `json:"attempt_id,omitempty"`
-	AttemptStatus   configkit.AttemptStatus `json:"attempt_status"`
-	ManagerState    configkit.StatusState   `json:"manager_state"`
-	Published       bool                    `json:"published"`
-	Changed         bool                    `json:"changed"`
-	CurrentChecksum string                  `json:"current_checksum,omitempty"`
-	CurrentRevision string                  `json:"current_revision,omitempty"`
-	Error           string                  `json:"error,omitempty"`
+	AttemptID       uint64                   `json:"attempt_id,omitempty"`
+	AttemptStatus   configkit.AttemptStatus  `json:"attempt_status"`
+	ManagerState    configkit.LifecycleState `json:"manager_state"`
+	Published       bool                     `json:"published"`
+	Changed         bool                     `json:"changed"`
+	CurrentChecksum string                   `json:"current_checksum,omitempty"`
+	CurrentRevision string                   `json:"current_revision,omitempty"`
+	Error           string                   `json:"error,omitempty"`
 }
 
-func reloadCommandPayload[T any](result configkit.ManagedLoadResult[T], status configkit.Status, loadErr error) reloadResultPayload {
+func reloadCommandPayload[T any](result configkit.ManagedLoadResult[T], status configkit.LifecycleStatus, loadErr error) reloadResultPayload {
 	payload := reloadResultPayload{
 		AttemptID:     result.Load.Attempt.ID,
 		AttemptStatus: result.Load.Attempt.Status,

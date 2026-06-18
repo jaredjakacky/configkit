@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	opskit "github.com/jaredjakacky/opskit"
 )
 
 const defaultAttemptHistoryLimit = 20
@@ -29,7 +31,10 @@ type Manager[T any] struct {
 	attemptHistory      []AttemptRecord
 	attemptHistoryLimit int
 
-	observers []Observer
+	observers        []Observer
+	componentInfo    opskit.ComponentInfo
+	degradedReady    bool
+	degradedReadySet bool
 }
 
 // ManagerOption configures a Manager.
@@ -39,15 +44,19 @@ type managerOptions struct {
 	observers              []Observer
 	attemptHistoryLimit    int
 	attemptHistoryLimitSet bool
+	componentInfo          opskit.ComponentInfo
+	componentInfoSet       bool
+	degradedReady          bool
+	degradedReadySet       bool
 }
 
 // WithObservers registers configuration lifecycle observers for the manager.
 //
 // Observers run synchronously by default. They should return quickly and must
 // not call Load, LoadFromSource, or Apply on the same manager. Read-only calls
-// such as Status, Inspect, Snapshot, and Value are acceptable. Use AsyncObserver
-// or another goroutine for follow-up work that may block or trigger lifecycle
-// operations.
+// such as LifecycleStatus, LifecycleInspection, Snapshot, and Value are
+// acceptable. Use AsyncObserver or another goroutine for follow-up work that
+// may block or trigger lifecycle operations.
 func WithObservers(observers ...Observer) ManagerOption {
 	return func(options *managerOptions) {
 		options.observers = append(options.observers, observers...)
@@ -62,6 +71,42 @@ func WithAttemptHistoryLimit(limit int) ManagerOption {
 	return func(options *managerOptions) {
 		options.attemptHistoryLimit = limit
 		options.attemptHistoryLimitSet = true
+	}
+}
+
+// WithIdentity sets the Opskit component name for the manager.
+//
+// The default name is "config". Empty names are ignored.
+func WithIdentity(name string) ManagerOption {
+	return func(options *managerOptions) {
+		if name == "" {
+			return
+		}
+		options.componentInfo.Name = name
+		options.componentInfoSet = true
+	}
+}
+
+// WithComponentInfo sets the Opskit component identity for the manager.
+//
+// Empty fields fall back to Configkit defaults. Labels are appended to stable
+// Configkit labels; the kit=configkit label is always preserved.
+func WithComponentInfo(info opskit.ComponentInfo) ManagerOption {
+	return func(options *managerOptions) {
+		options.componentInfo = info
+		options.componentInfoSet = true
+	}
+}
+
+// WithDegradedReady configures whether degraded Configkit lifecycle state is
+// ready through Opskit readiness.
+//
+// The default is true because degraded means a valid last-known-good snapshot
+// remains active after a failed later attempt.
+func WithDegradedReady(ready bool) ManagerOption {
+	return func(options *managerOptions) {
+		options.degradedReady = ready
+		options.degradedReadySet = true
 	}
 }
 
@@ -84,15 +129,22 @@ func NewManager[T any](opts ...ManagerOption) *Manager[T] {
 			attemptHistoryLimit = -1
 		}
 	}
+	degradedReady := true
+	if options.degradedReadySet {
+		degradedReady = options.degradedReady
+	}
 
 	return &Manager[T]{
 		attemptHistoryLimit: attemptHistoryLimit,
 		observers:           append([]Observer(nil), options.observers...),
+		componentInfo:       managerComponentInfo(options.componentInfo, options.componentInfoSet),
+		degradedReady:       degradedReady,
+		degradedReadySet:    true,
 	}
 }
 
-// Status returns the current observable configuration lifecycle state.
-func (m *Manager[T]) Status() Status {
+// LifecycleStatus returns the current observable configuration lifecycle state.
+func (m *Manager[T]) LifecycleStatus() LifecycleStatus {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -110,14 +162,14 @@ func (m *Manager[T]) Attempts() []AttemptRecord {
 	return cloneAttemptRecords(m.attemptHistory)
 }
 
-// Inspect returns a safe operational view of current configuration state.
+// LifecycleInspection returns a safe operational view of current configuration state.
 //
-// Inspect does not expose the typed configuration value.
-func (m *Manager[T]) Inspect() Inspection {
+// LifecycleInspection does not expose the typed configuration value.
+func (m *Manager[T]) LifecycleInspection() LifecycleInspection {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	inspection := Inspection{
+	inspection := LifecycleInspection{
 		Status: m.statusLocked(),
 	}
 
@@ -128,8 +180,8 @@ func (m *Manager[T]) Inspect() Inspection {
 	return inspection
 }
 
-func (m *Manager[T]) statusLocked() Status {
-	status := Status{
+func (m *Manager[T]) statusLocked() LifecycleStatus {
+	status := LifecycleStatus{
 		LastAttempt: cloneAttemptRecordPtr(m.lastAttempt),
 		LastSuccess: cloneAttemptRecordPtr(m.lastSuccess),
 		LastFailure: cloneAttemptRecordPtr(m.lastFailure),
@@ -138,11 +190,11 @@ func (m *Manager[T]) statusLocked() Status {
 
 	if m.current == nil {
 		if m.lastAttempt != nil && m.lastAttempt.Status == AttemptStatusFailed {
-			status.State = StatusStateFailed
+			status.State = LifecycleStateFailed
 			return status
 		}
 
-		status.State = StatusStateUnloaded
+		status.State = LifecycleStateUnloaded
 		return status
 	}
 
@@ -150,11 +202,11 @@ func (m *Manager[T]) statusLocked() Status {
 	status.Current = &metadata
 
 	if m.lastAttempt != nil && m.lastAttempt.Status == AttemptStatusFailed {
-		status.State = StatusStateDegraded
+		status.State = LifecycleStateDegraded
 		return status
 	}
 
-	status.State = StatusStateLoaded
+	status.State = LifecycleStateLoaded
 	return status
 }
 

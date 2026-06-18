@@ -17,6 +17,7 @@ import (
 	configkit "github.com/jaredjakacky/configkit"
 	ckops "github.com/jaredjakacky/configkit/opshttp"
 	ckworker "github.com/jaredjakacky/configkit/worker"
+	opskit "github.com/jaredjakacky/opskit"
 	servekit "github.com/jaredjakacky/servekit"
 	workerkit "github.com/jaredjakacky/workerkit"
 	wkops "github.com/jaredjakacky/workerkit/opshttp"
@@ -30,14 +31,14 @@ type AppConfig struct {
 }
 
 type reloadPayload struct {
-	AttemptID       uint64                  `json:"attempt_id,omitempty"`
-	AttemptStatus   configkit.AttemptStatus `json:"attempt_status"`
-	ManagerState    configkit.StatusState   `json:"manager_state"`
-	Published       bool                    `json:"published"`
-	Changed         bool                    `json:"changed"`
-	CurrentChecksum string                  `json:"current_checksum,omitempty"`
-	CurrentRevision string                  `json:"current_revision,omitempty"`
-	Error           string                  `json:"error,omitempty"`
+	AttemptID       uint64                   `json:"attempt_id,omitempty"`
+	AttemptStatus   configkit.AttemptStatus  `json:"attempt_status"`
+	ManagerState    configkit.LifecycleState `json:"manager_state"`
+	Published       bool                     `json:"published"`
+	Changed         bool                     `json:"changed"`
+	CurrentChecksum string                   `json:"current_checksum,omitempty"`
+	CurrentRevision string                   `json:"current_revision,omitempty"`
+	Error           string                   `json:"error,omitempty"`
 }
 
 func main() {
@@ -57,21 +58,28 @@ func main() {
 	})
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	manager := configkit.NewManager[AppConfig](configkit.WithObservers(configkit.SlogObserver(logger)))
+	ops := opskit.NewRegistry()
+	manager := configkit.NewManager[AppConfig](
+		configkit.WithIdentity("config"),
+		configkit.WithObservers(configkit.SlogObserver(logger)),
+	)
+	ops.MustRegister(manager, opskit.Required())
+
 	source := configkit.NewFileSource(configPath, configkit.SourceMetadata{Name: "app-config.json", Kind: "file"})
 	pipeline := appPipeline()
 
 	if _, err := manager.LoadFromSource(ctx, configkit.AttemptKindInitialLoad, source, pipeline); err != nil {
 		log.Fatalf("initial config load: %v", err)
 	}
-	fmt.Printf("1. service starts with valid config: status=%s\n", manager.Status().State)
+	fmt.Printf("1. service starts with valid config: status=%s\n", manager.LifecycleStatus().State)
 
 	runtime := newWorkerRuntime(ctx, manager, source, pipeline)
 	defer shutdownRuntime(ctx, runtime)
+	ops.MustRegister(runtime, opskit.Required())
 
 	auth := servekit.WithAuthGate(requireAdminToken)
 	server := servekit.New(
-		servekit.WithReadinessChecks(ckops.ReadinessCheck(manager), wkops.ReadinessCheck(runtime)),
+		servekit.WithOps(ops, servekit.WithOpsAdmin(), servekit.WithOpsAdminAuthGate(requireAdminToken)),
 	)
 	server.SetReady(true)
 
@@ -93,7 +101,9 @@ func main() {
 	}
 
 	fmt.Printf("2. /message uses typed config: %s\n", get(server, "/message", ""))
-	fmt.Printf("3. /admin/config exposes safe inspection: %s\n", get(server, "/admin/config", "demo"))
+	fmt.Printf("3. /admin/components/config exposes Opskit inspection: %s\n", get(server, "/admin/components/config", "demo"))
+	fmt.Printf("   /admin/components/production exposes Workerkit inspection: %s\n", get(server, "/admin/components/production", "demo"))
+	fmt.Printf("   /admin/config exposes Configkit-specific inspection: %s\n", get(server, "/admin/config", "demo"))
 	fmt.Printf("   worker command discovery: %s\n", get(server, "/admin/workers/commands?worker=config", "demo"))
 
 	writeConfig(configPath, AppConfig{
@@ -116,7 +126,7 @@ func main() {
 	current, _ := manager.Value()
 	fmt.Printf("5. failed reload preserves last-known-good: %+v\n", failed)
 	fmt.Printf("   current typed config: service=%s port=%d message=%q\n", current.ServiceName, current.Port, current.Message)
-	fmt.Printf("6. status becomes degraded: %s\n", manager.Status().State)
+	fmt.Printf("6. status becomes degraded: %s\n", manager.LifecycleStatus().State)
 	fmt.Printf("   /readyz remains ready by default: %s\n", get(server, "/readyz", ""))
 }
 

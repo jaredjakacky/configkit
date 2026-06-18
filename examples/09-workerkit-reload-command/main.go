@@ -20,14 +20,14 @@ type AppConfig struct {
 }
 
 type reloadPayload struct {
-	AttemptID       uint64                  `json:"attempt_id,omitempty"`
-	AttemptStatus   configkit.AttemptStatus `json:"attempt_status"`
-	ManagerState    configkit.StatusState   `json:"manager_state"`
-	Published       bool                    `json:"published"`
-	Changed         bool                    `json:"changed"`
-	CurrentChecksum string                  `json:"current_checksum,omitempty"`
-	CurrentRevision string                  `json:"current_revision,omitempty"`
-	Error           string                  `json:"error,omitempty"`
+	AttemptID       uint64                   `json:"attempt_id,omitempty"`
+	AttemptStatus   configkit.AttemptStatus  `json:"attempt_status"`
+	ManagerState    configkit.LifecycleState `json:"manager_state"`
+	Published       bool                     `json:"published"`
+	Changed         bool                     `json:"changed"`
+	CurrentChecksum string                   `json:"current_checksum,omitempty"`
+	CurrentRevision string                   `json:"current_revision,omitempty"`
+	Error           string                   `json:"error,omitempty"`
 }
 
 func main() {
@@ -54,7 +54,7 @@ func main() {
 	if _, err := manager.LoadFromSource(ctx, configkit.AttemptKindInitialLoad, source, pipeline); err != nil {
 		log.Fatalf("initial load: %v", err)
 	}
-	fmt.Printf("initial config loaded: state=%s\n", manager.Status().State)
+	fmt.Printf("initial config loaded: state=%s\n", manager.LifecycleStatus().State)
 
 	runtime, err := workerkit.New(workerkit.Identity{Name: "config-runtime"})
 	if err != nil {

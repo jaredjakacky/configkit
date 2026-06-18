@@ -1,6 +1,6 @@
 # Configkit Examples
 
-Configkit is a typed configuration lifecycle shell for Go services. These examples are the fastest way to understand what that means in practice: starting from raw JSON bytes becoming a validated snapshot, ending with a production-style composition that includes safe inspection, last-known-good reload behavior, structured observability, Servekit ops routes, Servekit readiness, and a Workerkit reload command.
+Configkit is a typed configuration lifecycle shell for Go services. These examples are the fastest way to understand what that means in practice: starting from raw JSON bytes becoming a validated snapshot, ending with a production-style composition that includes safe inspection, last-known-good reload behavior, structured observability, Opskit-backed Servekit operations, Servekit readiness, and a Workerkit reload command.
 
 Every example is runnable, and every example is part of the public documentation. They are meant to teach the model, not just prove the code compiles.
 
@@ -16,7 +16,7 @@ Read the examples in the order listed below. Each one builds on the last. By the
 
 **[02-file-source](02-file-source)** — Loading configuration from a local JSON file. This example focuses on `FileSource`, safe source metadata, source revisions, snapshot checksums, and `loaded_at` metadata.
 
-**[03-redaction-inspection](03-redaction-inspection)** — Typed config can contain sensitive fields, but operational inspection should not. This example shows an application-owned `Redactor` and `Manager.Inspect()` returning only a safe `RedactedView`.
+**[03-redaction-inspection](03-redaction-inspection)** — Typed config can contain sensitive fields, but operational inspection should not. This example shows an application-owned `Redactor` and `Manager.LifecycleInspection()` returning only a safe `RedactedView`.
 
 ### Reload Semantics
 
@@ -30,9 +30,9 @@ Read the examples in the order listed below. Each one builds on the last. By the
 
 ### Servekit Integration
 
-**[07-servekit-opshttp](07-servekit-opshttp)** — Configkit snaps into Servekit through `configkit/opshttp`. Protected read-only routes expose inspection and attempts at `/admin/config` and `/admin/config/attempts`, while the application route reads typed config through `Manager.Value()`.
+**[07-servekit-opshttp](07-servekit-opshttp)** — Optional Configkit-specific Servekit routes through `configkit/opshttp`. Protected read-only routes expose inspection and attempts at `/admin/config` and `/admin/config/attempts`, while the application route reads typed config through `Manager.Value()`.
 
-**[08-servekit-readiness](08-servekit-readiness)** — Configkit status contributes to Servekit readiness. This example shows unloaded and failed states as not ready, loaded as ready, degraded as ready by default, and the stricter degraded-not-ready option.
+**[08-servekit-readiness](08-servekit-readiness)** — Configkit Manager contributes readiness through an Opskit registry consumed by Servekit. This example shows unloaded and failed states as not ready, loaded as ready, degraded as ready by default, and the stricter degraded-not-ready option.
 
 ### Workerkit Integration
 
@@ -40,7 +40,7 @@ Read the examples in the order listed below. Each one builds on the last. By the
 
 ### The Full Picture
 
-**[10-production-composition](10-production-composition)** — The full Kit Series composition. Configkit owns typed configuration lifecycle, Servekit owns HTTP service policy, and Workerkit owns command dispatch. The example demonstrates typed config reads, protected inspection, command-driven reload, failed reload preservation, degraded status, and readiness staying ready by default because last-known-good config remains active.
+**[10-production-composition](10-production-composition)** — The full Kit Series composition. Configkit owns typed configuration lifecycle, Opskit owns the shared operational registry, Servekit owns HTTP service policy, and Workerkit owns command dispatch. The example demonstrates typed config reads, protected inspection, command-driven reload, failed reload preservation, degraded status, and readiness staying ready by default because last-known-good config remains active.
 
 ---
 
@@ -53,7 +53,7 @@ This order answers five questions:
 - "What is the shortest useful Configkit load?"
 - "How do source metadata, redaction, snapshots, status, and inspection work before reloads?"
 - "What happens when reloads succeed, fail, or publish the same effective config?"
-- "How do I observe and expose Configkit safely through Servekit and Workerkit?"
+- "How do I observe and expose Configkit safely through Opskit, Servekit, and Workerkit?"
 - "What does the full production composition look like?"
 
 ---

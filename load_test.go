@@ -216,11 +216,14 @@ func TestLoadRecoversPipelinePanic(t *testing.T) {
 	if err == nil {
 		t.Fatal("load panic error = nil, want error")
 	}
-	if !errors.Is(err, panicErr) {
-		t.Fatalf("load panic error = %v, want wrapping panic error", err)
+	if !errors.Is(err, configkit.ErrLifecyclePanicked) {
+		t.Fatalf("load panic error = %v, want configkit.ErrLifecyclePanicked", err)
 	}
-	if !strings.Contains(err.Error(), "validate config panic: boom") {
-		t.Fatalf("load panic error = %q, want panic prefix", err.Error())
+	if errors.Is(err, panicErr) {
+		t.Fatalf("load panic error = %v, must not unwrap recovered panic error", err)
+	}
+	if err.Error() != "validate config panicked" {
+		t.Fatalf("load panic error = %q, want safe panic message", err.Error())
 	}
 	assertFailedAttempt(t, result, configkit.AttemptStageValidateConfig)
 }
@@ -303,8 +306,11 @@ func TestLoadFromSourceRecoversMetadataPanic(t *testing.T) {
 	if err == nil {
 		t.Fatal("load source metadata panic error = nil, want error")
 	}
-	if !strings.Contains(err.Error(), "read config source metadata panic") {
-		t.Fatalf("load source metadata panic error = %q, want metadata panic prefix", err.Error())
+	if !errors.Is(err, configkit.ErrLifecyclePanicked) {
+		t.Fatalf("load source metadata panic error = %v, want configkit.ErrLifecyclePanicked", err)
+	}
+	if err.Error() != "read config source metadata panicked" {
+		t.Fatalf("load source metadata panic error = %q, want safe panic message", err.Error())
 	}
 	assertFailedAttempt(t, result, configkit.AttemptStageSourceRead)
 }
@@ -319,8 +325,11 @@ func TestLoadFromSourceRecoversReadPanic(t *testing.T) {
 	if err == nil {
 		t.Fatal("load source read panic error = nil, want error")
 	}
-	if !strings.Contains(err.Error(), "read config source panic") {
-		t.Fatalf("load source read panic error = %q, want read panic prefix", err.Error())
+	if !errors.Is(err, configkit.ErrLifecyclePanicked) {
+		t.Fatalf("load source read panic error = %v, want configkit.ErrLifecyclePanicked", err)
+	}
+	if err.Error() != "read config source panicked" {
+		t.Fatalf("load source read panic error = %q, want safe panic message", err.Error())
 	}
 	assertFailedAttempt(t, result, configkit.AttemptStageSourceRead)
 }

@@ -17,18 +17,21 @@
 // once without storing state.
 //
 // Manager stores the current last-known-good snapshot, records recent load
-// attempts, exposes status, and preserves the current snapshot when a later
-// load fails. Manager load methods return both the stateless load result and
-// the apply result describing publication.
+// attempts, exposes lifecycle status and Opskit operational views, and
+// preserves the current snapshot when a later load fails. Manager load methods
+// return both the stateless load result and the apply result describing
+// publication.
 //
 // Lifecycle APIs require callers to pass a non-nil context. Passing a nil
 // context is invalid and may panic.
 //
-// Provider and Inspector are read-only seams for other packages that need
-// current configuration state or safe operational inspection without mutating
-// configuration lifecycle state. Operational views do not expose the typed
-// configuration value, but they can include caller-provided metadata, revisions,
-// redacted values, and error strings.
+// LifecycleProvider and LifecycleInspector are read-only seams for other
+// packages that need current configuration state or safe lifecycle inspection
+// without mutating configuration lifecycle state. Manager also directly
+// implements Opskit's Component, ReadinessContributor, and Inspector contracts.
+// Operational views do not expose the typed configuration value, but they can
+// include caller-provided metadata, revisions, redacted values, and error
+// strings.
 //
 // Treat all operational output as potentially visible to logs, telemetry,
 // diagnostics, support tools, or admin endpoints. Do not put secrets in
@@ -37,8 +40,9 @@
 // conservative and prefer EmptyRedactor until a field is explicitly safe to
 // expose. Checksums are operational fingerprints, not secret-safe redaction
 // mechanisms, and can leak information for low-entropy values or known config
-// sets. HTTP or admin endpoints that expose Status or Inspection should be
-// protected by the application's routing, authentication, and policy layer.
+// sets. HTTP or admin endpoints that expose LifecycleStatus,
+// LifecycleInspection, or Opskit inspection should be protected by the
+// application's routing, authentication, and policy layer.
 //
 // Observers provide lifecycle telemetry hooks, with SlogObserver and
 // AsyncObserver adapters for standard logging and explicit asynchronous

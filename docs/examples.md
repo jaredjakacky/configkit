@@ -20,7 +20,7 @@ go run ./examples/<name>
 
 **What it demonstrates:** The smallest useful Configkit program: `BytesSource`,
 `Pipeline`, `JSONDecoder`, defaults, validation, `EmptyRedactor`,
-`SHA256JSONChecksum`, `NewManager`, `LoadFromSource`, `Value`, and `Status`.
+`SHA256JSONChecksum`, `NewManager`, `LoadFromSource`, `Value`, and `LifecycleStatus`.
 
 **Run it:**
 
@@ -164,7 +164,8 @@ readiness-specific behavior, or OpenTelemetry.
 
 ### [`examples/08-servekit-readiness`](../examples/08-servekit-readiness)
 
-**What it demonstrates:** Configkit status adapted into Servekit readiness.
+**What it demonstrates:** Configkit Manager registered with Opskit and exposed
+through Servekit readiness.
 
 **Run it:**
 
@@ -176,8 +177,8 @@ go run ./examples/08-servekit-readiness
 successful load, ready by default after a failed reload with last-known-good
 active, and not ready with strict degraded readiness.
 
-**What to notice:** `degraded` is ready by default because the active config is
-still valid.
+**What to notice:** Servekit reads Configkit readiness through Opskit.
+`degraded` is ready by default because the active config is still valid.
 
 **What this example intentionally does not show:** Ops routes, Workerkit,
 observers, files, or OpenTelemetry.

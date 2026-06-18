@@ -56,5 +56,5 @@ func main() {
 	if _, err := manager.LoadFromSource(ctx, configkit.AttemptKindReload, invalidSource, pipeline); err != nil {
 		fmt.Printf("reload failed as expected: %v\n", err)
 	}
-	fmt.Printf("final manager status: %s\n", manager.Status().State)
+	fmt.Printf("final manager status: %s\n", manager.LifecycleStatus().State)
 }

@@ -326,14 +326,37 @@ configuration into a framework.
 
 ### Manager state
 
-- `Manager.Status()`
+- `Manager.LifecycleStatus()`
 
   Returns the current observable lifecycle state.
 
-- `Manager.Inspect()`
+- `Manager.LifecycleInspection()`
 
-  Returns `Inspection`, including status and the current snapshot's redacted
+  Returns `LifecycleInspection`, including status and the current snapshot's redacted
   view when a snapshot is active. It does not expose the typed config value.
+
+- `Manager.ComponentInfo()`
+
+  Returns the manager's Opskit component identity. Defaults to name `config`,
+  kind `config`, description `application configuration`, and label
+  `kit=configkit`.
+
+- `Manager.Status(ctx)`
+
+  Returns the manager's cached lifecycle state as an `opskit.Status`. Status
+  attributes are intentionally low-cardinality and do not include source names,
+  revisions, checksums, errors, paths, tenant IDs, or redacted config values.
+
+- `Manager.Readiness(ctx)`
+
+  Returns the manager's configured Opskit readiness. Degraded is ready by
+  default because a last-known-good snapshot remains active.
+
+- `Manager.Inspect(ctx)`
+
+  Returns an `opskit.Inspection` with lifecycle summary, redacted config
+  details, retained attempts, and last apply result. It does not expose the
+  typed config value.
 
 - `Manager.Attempts()`
 
@@ -364,8 +387,8 @@ configuration into a framework.
 
   Registers lifecycle observers. Observers run synchronously by default, should
   return quickly, and must not call `Load`, `LoadFromSource`, or `Apply` on the
-  same manager that emitted the event. Read-only calls such as `Status`,
-  `Inspect`, `Snapshot`, and `Value` are acceptable.
+  same manager that emitted the event. Read-only calls such as `LifecycleStatus`,
+  `LifecycleInspection`, `Snapshot`, and `Value` are acceptable.
 
 - `WithAttemptHistoryLimit(limit int)`
 
@@ -373,76 +396,90 @@ configuration into a framework.
   or equal to zero disables history while preserving last attempt, success, and
   failure status.
 
+- `WithIdentity(name string)`
+
+  Sets the manager's Opskit component name. The default is `config`.
+
+- `WithComponentInfo(info opskit.ComponentInfo)`
+
+  Sets the manager's Opskit component identity. Empty fields fall back to
+  Configkit defaults.
+
+- `WithDegradedReady(ready bool)`
+
+  Configures whether degraded lifecycle state is ready through Opskit
+  readiness. The default is `true`.
+
 - `ErrInvalidLoadResult`
 
   Returned when `Manager.Apply` receives a malformed `LoadResult`.
 
 ### Status and inspection
 
-- `Status`
+- `LifecycleStatus`
 
   Observable lifecycle state. It is intentionally not generic and does not
   expose the typed config value.
 
-- `Status.State`
+- `LifecycleStatus.State`
 
   High-level lifecycle state.
 
-- `Status.Current`
+- `LifecycleStatus.Current`
 
   Current snapshot metadata when a snapshot is active.
 
-- `Status.LastAttempt`
+- `LifecycleStatus.LastAttempt`
 
   Most recent load or reload attempt.
 
-- `Status.LastSuccess`
+- `LifecycleStatus.LastSuccess`
 
   Most recent successful attempt.
 
-- `Status.LastFailure`
+- `LifecycleStatus.LastFailure`
 
   Most recent failed attempt.
 
-- `Status.LastApply`
+- `LifecycleStatus.LastApply`
 
   Most recent apply result.
 
-- `StatusState`
+- `LifecycleState`
 
   String enum for lifecycle state.
 
-- `StatusStateUnloaded`
+- `LifecycleStateUnloaded`
 
   No valid snapshot has been published and no failed load attempt has been
   recorded.
 
-- `StatusStateLoaded`
+- `LifecycleStateLoaded`
 
   A valid snapshot is active and the most recent attempt did not fail.
 
-- `StatusStateFailed`
+- `LifecycleStateFailed`
 
   No valid snapshot is active because the most recent load attempt failed.
 
-- `StatusStateDegraded`
+- `LifecycleStateDegraded`
 
   A valid snapshot is active, but the most recent load or reload attempt failed.
   The last-known-good snapshot remains active.
 
-- `Inspection`
+- `LifecycleInspection`
 
-  Safe operational view with `Status` plus application-owned `RedactedView`.
+  Safe operational view with `LifecycleStatus` plus application-owned `RedactedView`.
 
-- `Inspection.Status`
+- `LifecycleInspection.Status`
 
   Current lifecycle status.
 
-- `Inspection.Redacted`
+- `LifecycleInspection.Redacted`
 
   Current snapshot redacted view, when a snapshot is active.
 
-- `Provider[T]`
+- `LifecycleProvider[T]`
 
   Read-only typed config access interface.
 
@@ -451,14 +488,14 @@ configuration into a framework.
   ```go
   Snapshot() (Snapshot[T], bool)
   Value() (T, bool)
-  Status() Status
+  LifecycleStatus() LifecycleStatus
   ```
 
-- `Inspector`
+- `LifecycleInspector`
 
   Safe operational inspection interface.
 
-  Shape: `Inspect() Inspection`
+  Shape: `LifecycleInspection() LifecycleInspection`
 
 ### Attempts and apply results
 
@@ -725,11 +762,12 @@ responses as visible to their audience.
 
 ## Package `opshttp`
 
-The `opshttp` package adapts Configkit operational state into Servekit routes.
-It is optional at the package level: the root `configkit` package does not
-import or compile against Servekit, and applications only compile `opshttp`
-when they import it. Because `opshttp` lives in this same Go module, Servekit
-may still appear in this repository's `go.mod`.
+The `opshttp` package provides optional Configkit-specific HTTP inspection for
+Servekit. The primary Kit Series composition path is registering
+`Manager[T]` in an Opskit registry and passing that registry to
+`servekit.WithOps`. Applications only compile `opshttp` when they import it.
+Because `opshttp` lives in this same Go module, Servekit may still appear in
+this repository's `go.mod`.
 
 ### Route mounting
 
@@ -772,9 +810,10 @@ may still appear in this repository's `go.mod`.
 
 ### Readiness
 
-- `ReadinessCheck(provider, opts...)`
+- `ReadinessCheck(provider)`
 
-  Adapts Configkit status into a Servekit readiness check.
+  Adapts Configkit core readiness into a Servekit readiness check for services
+  that are not using an Opskit registry.
 
   Default policy:
 
@@ -785,17 +824,12 @@ may still appear in this repository's `go.mod`.
 
 - `ReadinessProvider`
 
-  Interface for values that expose Configkit status.
+  Interface for values that expose Configkit readiness.
 
-  Shape: `Status() configkit.Status`
+  Shape: `Readiness(context.Context) opskit.Readiness`
 
-- `ReadinessOption`
-
-  Readiness configuration hook.
-
-- `WithDegradedReady(ready bool)`
-
-  Controls whether degraded state is ready. The default is `true` because
+  Use `configkit.WithDegradedReady(false)` when constructing a manager to make
+  degraded lifecycle state not ready. The default is `true` because
   degraded means the last-known-good snapshot remains active.
 
 ## Package `worker`
@@ -804,7 +838,9 @@ The `worker` package adapts Configkit reloads into Workerkit commands. It is
 optional at the package level: the root `configkit` package does not import or
 compile against Workerkit, and applications only compile `worker` when they
 import it. Because `worker` lives in this same Go module, Workerkit may still
-appear in this repository's `go.mod`.
+appear in this repository's `go.mod`. With Workerkit v0.2.0 or newer, register
+the Workerkit runtime itself in Opskit for readiness and generic inspection;
+`configkit/worker` remains the reload command adapter.
 
 ### Reload command
 

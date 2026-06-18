@@ -40,8 +40,8 @@ func main() {
 	if _, err := manager.LoadFromSource(ctx, configkit.AttemptKindInitialLoad, validSource, pipeline); err != nil {
 		log.Fatal(err)
 	}
-	if status := manager.Status(); status.State != configkit.StatusStateLoaded {
-		log.Fatalf("initial manager state = %s, want %s", status.State, configkit.StatusStateLoaded)
+	if status := manager.LifecycleStatus(); status.State != configkit.LifecycleStateLoaded {
+		log.Fatalf("initial manager state = %s, want %s", status.State, configkit.LifecycleStateLoaded)
 	}
 
 	invalidSource := configkit.NewBytesSource(
@@ -54,9 +54,9 @@ func main() {
 		log.Fatal("reload error = nil, want validation error")
 	}
 
-	status := manager.Status()
-	if status.State != configkit.StatusStateDegraded {
-		log.Fatalf("manager state = %s, want %s", status.State, configkit.StatusStateDegraded)
+	status := manager.LifecycleStatus()
+	if status.State != configkit.LifecycleStateDegraded {
+		log.Fatalf("manager state = %s, want %s", status.State, configkit.LifecycleStateDegraded)
 	}
 	current, ok := manager.Value()
 	if !ok {

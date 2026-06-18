@@ -28,7 +28,7 @@ by default, so they should return quickly.
 
 A synchronous observer must not call `Load`, `LoadFromSource`, or `Apply` on
 the same manager that emitted the event. That creates reentrant lifecycle
-behavior and can deadlock. Read-only calls such as `Status`, `Inspect`,
+behavior and can deadlock. Read-only calls such as `LifecycleStatus`, `LifecycleInspection`,
 `Snapshot`, and `Value` are acceptable because they do not start another
 lifecycle operation.
 

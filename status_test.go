@@ -11,9 +11,9 @@ import (
 func TestStatusZeroManagerIsUnloaded(t *testing.T) {
 	var manager configkit.Manager[stepsTestConfig]
 
-	status := manager.Status()
-	if status.State != configkit.StatusStateUnloaded {
-		t.Fatalf("status state = %q, want %q", status.State, configkit.StatusStateUnloaded)
+	status := manager.LifecycleStatus()
+	if status.State != configkit.LifecycleStateUnloaded {
+		t.Fatalf("status state = %q, want %q", status.State, configkit.LifecycleStateUnloaded)
 	}
 	if status.Current != nil {
 		t.Fatalf("current = %+v, want nil", status.Current)
@@ -39,9 +39,9 @@ func TestStatusFailedAfterFailedApplyWithoutCurrentSnapshot(t *testing.T) {
 		t.Fatalf("apply failed result: %v", err)
 	}
 
-	status := manager.Status()
-	if status.State != configkit.StatusStateFailed {
-		t.Fatalf("status state = %q, want %q", status.State, configkit.StatusStateFailed)
+	status := manager.LifecycleStatus()
+	if status.State != configkit.LifecycleStateFailed {
+		t.Fatalf("status state = %q, want %q", status.State, configkit.LifecycleStateFailed)
 	}
 	if status.Current != nil {
 		t.Fatalf("current = %+v, want nil", status.Current)
@@ -64,9 +64,9 @@ func TestStatusLoadedAfterSuccessfulApply(t *testing.T) {
 		t.Fatalf("apply succeeded result: %v", err)
 	}
 
-	status := manager.Status()
-	if status.State != configkit.StatusStateLoaded {
-		t.Fatalf("status state = %q, want %q", status.State, configkit.StatusStateLoaded)
+	status := manager.LifecycleStatus()
+	if status.State != configkit.LifecycleStateLoaded {
+		t.Fatalf("status state = %q, want %q", status.State, configkit.LifecycleStateLoaded)
 	}
 	if status.Current == nil {
 		t.Fatal("current = nil, want snapshot metadata")
@@ -101,9 +101,9 @@ func TestStatusDegradedAfterFailedApplyWithCurrentSnapshot(t *testing.T) {
 		t.Fatalf("apply failed result: %v", err)
 	}
 
-	status := manager.Status()
-	if status.State != configkit.StatusStateDegraded {
-		t.Fatalf("status state = %q, want %q", status.State, configkit.StatusStateDegraded)
+	status := manager.LifecycleStatus()
+	if status.State != configkit.LifecycleStateDegraded {
+		t.Fatalf("status state = %q, want %q", status.State, configkit.LifecycleStateDegraded)
 	}
 	if status.Current == nil || status.Current.Checksum != "sum-1" {
 		t.Fatalf("current = %+v, want last known good snapshot metadata", status.Current)
@@ -129,13 +129,13 @@ func TestStatusReturnsCopies(t *testing.T) {
 		t.Fatalf("apply succeeded result: %v", err)
 	}
 
-	status := manager.Status()
+	status := manager.LifecycleStatus()
 	status.Current.Checksum = "mutated-current"
 	status.LastAttempt.Checksum = "mutated-attempt"
 	status.LastSuccess.Checksum = "mutated-success"
 	status.LastApply.Current.Checksum = "mutated-apply"
 
-	next := manager.Status()
+	next := manager.LifecycleStatus()
 	if next.Current.Checksum != "sum-1" {
 		t.Fatalf("current checksum after external mutation = %q, want %q", next.Current.Checksum, "sum-1")
 	}

@@ -163,15 +163,22 @@ events and increments `Dropped`.
 
 ## Strict Readiness
 
-`opshttp.ReadinessCheck` treats degraded as ready by default because the
-last-known-good snapshot remains active.
+Configkit treats degraded as ready by default because the last-known-good
+snapshot remains active. This applies through Opskit readiness and through the
+standalone `opshttp.ReadinessCheck` adapter.
 
 Use strict readiness when any failed reload should remove the service from
 traffic:
 
 ```go
-servekit.WithReadinessChecks(
-	opshttp.ReadinessCheck(manager, opshttp.WithDegradedReady(false)),
+ops := opskit.NewRegistry()
+manager := configkit.NewManager[AppConfig](
+	configkit.WithDegradedReady(false),
+)
+ops.MustRegister(manager, opskit.Required())
+
+servekit.New(
+	servekit.WithOps(ops),
 )
 ```
 
@@ -179,7 +186,8 @@ servekit.WithReadinessChecks(
 
 Use adapters where they remove repeated operational glue:
 
-- `configkit/opshttp` for Servekit inspection and readiness
+- Opskit registry plus `servekit.WithOps` for primary Servekit readiness and inspection
+- `configkit/opshttp` for specialized Configkit HTTP inspection or standalone readiness
 - `configkit/worker` for Workerkit reload commands
 - `configkit/otel` for OpenTelemetry observers
 
@@ -213,9 +221,10 @@ application or adapter.
 3. Add reload behavior and inspect degraded state.
 4. Add `SlogObserver`.
 5. Add custom copy or checksum only when the config shape requires it.
-6. Add `opshttp` for protected read-only inspection.
-7. Add `worker.ReloadCommand` if operators need command-driven reload.
-8. Add OpenTelemetry when the service telemetry backend is ready.
+6. Register the manager with Opskit for shared readiness and inspection.
+7. Add `opshttp` only when operators need Configkit-specific HTTP inspection.
+8. Add `worker.ReloadCommand` if operators need command-driven reload.
+9. Add OpenTelemetry when the service telemetry backend is ready.
 
 ## Related Material
 

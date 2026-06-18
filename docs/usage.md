@@ -147,12 +147,12 @@ later callers from mutating maps, slices, or pointers returned by
 `Manager.Value` or `Snapshot.Value`, so application code should treat those
 returned values as read-only.
 
-## Status and Inspection
+## Lifecycle Status and Inspection
 
-`Status` answers lifecycle questions:
+`LifecycleStatus` answers lifecycle questions:
 
 ```go
-status := manager.Status()
+status := manager.LifecycleStatus()
 fmt.Println(status.State)
 ```
 
@@ -163,14 +163,14 @@ States:
 - `loaded`
 - `degraded`
 
-`Inspect` returns status plus the current redacted view:
+`LifecycleInspection` returns status plus the current redacted view:
 
 ```go
-inspection := manager.Inspect()
+inspection := manager.LifecycleInspection()
 ```
 
-Inspection does not expose the typed config value. Its redacted data is only as
-safe as the application redactor.
+LifecycleInspection does not expose the typed config value. Its redacted data
+is only as safe as the application redactor.
 
 ## Reloads
 
@@ -206,8 +206,10 @@ Workerkit, or OpenTelemetry. The adapter packages live in this same Go module,
 so their dependencies may appear in `go.mod`; applications only compile adapter
 packages they import.
 
-Use `configkit/opshttp` when Servekit should expose read-only inspection,
-recent attempts, or readiness.
+For Kit Series services, register the manager in an Opskit registry and pass
+that registry to `servekit.WithOps`. Use `configkit/opshttp` only when Servekit
+should expose Configkit-specific read-only inspection, recent attempts, or
+standalone readiness without Opskit.
 
 Use `configkit/worker` when Workerkit should expose a reload command.
 
@@ -217,12 +219,12 @@ Manager options:
 
 - `WithObservers`
 - `WithAttemptHistoryLimit`
+- `WithDegradedReady`
 
 Ops HTTP options:
 
 - `opshttp.WithPathPrefix`
 - `opshttp.WithEndpointOptions`
-- `opshttp.WithDegradedReady`
 
 Worker reload command options:
 

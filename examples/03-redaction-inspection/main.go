@@ -52,11 +52,11 @@ func main() {
 	if _, err := manager.LoadFromSource(ctx, configkit.AttemptKindInitialLoad, source, pipeline); err != nil {
 		log.Fatal(err)
 	}
-	if status := manager.Status(); status.State != configkit.StatusStateLoaded {
-		log.Fatalf("manager state = %s, want %s", status.State, configkit.StatusStateLoaded)
+	if status := manager.LifecycleStatus(); status.State != configkit.LifecycleStateLoaded {
+		log.Fatalf("manager state = %s, want %s", status.State, configkit.LifecycleStateLoaded)
 	}
 
-	inspection := manager.Inspect()
+	inspection := manager.LifecycleInspection()
 	fmt.Printf("manager status: %s\n", inspection.Status.State)
 	fmt.Printf("redacted inspection: %+v\n", inspection.Redacted)
 }

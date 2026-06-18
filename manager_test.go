@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -117,9 +118,9 @@ func TestManagerApplyRejectsInvalidLoadResultWithoutMutation(t *testing.T) {
 		t.Fatalf("apply invalid result error = %v, want configkit.ErrInvalidLoadResult", err)
 	}
 
-	status := manager.Status()
-	if status.State != configkit.StatusStateUnloaded {
-		t.Fatalf("state = %q, want %q", status.State, configkit.StatusStateUnloaded)
+	status := manager.LifecycleStatus()
+	if status.State != configkit.LifecycleStateUnloaded {
+		t.Fatalf("state = %q, want %q", status.State, configkit.LifecycleStateUnloaded)
 	}
 	if len(manager.Attempts()) != 0 {
 		t.Fatalf("attempt history len = %d, want 0", len(manager.Attempts()))
@@ -135,7 +136,7 @@ func TestManagerApplyAssignsFreshAttemptID(t *testing.T) {
 		t.Fatalf("apply succeeded result: %v", err)
 	}
 
-	status := manager.Status()
+	status := manager.LifecycleStatus()
 	if status.LastAttempt == nil || status.LastAttempt.ID != 1 {
 		t.Fatalf("last attempt = %+v, want manager-assigned id 1", status.LastAttempt)
 	}
@@ -175,7 +176,7 @@ func TestManagerAttemptsDisabledPreservesStatusPointers(t *testing.T) {
 	if attempts := manager.Attempts(); len(attempts) != 0 {
 		t.Fatalf("attempt history len = %d, want 0", len(attempts))
 	}
-	status := manager.Status()
+	status := manager.LifecycleStatus()
 	if status.LastAttempt == nil || status.LastSuccess == nil {
 		t.Fatalf("status = %+v, want last attempt and last success preserved", status)
 	}
@@ -203,16 +204,16 @@ func TestManagerInspectReturnsStatusAndRedactedCopy(t *testing.T) {
 		t.Fatalf("apply succeeded result: %v", err)
 	}
 
-	inspection := manager.Inspect()
-	if inspection.Status.State != configkit.StatusStateLoaded {
-		t.Fatalf("inspection state = %q, want %q", inspection.Status.State, configkit.StatusStateLoaded)
+	inspection := manager.LifecycleInspection()
+	if inspection.Status.State != configkit.LifecycleStateLoaded {
+		t.Fatalf("inspection state = %q, want %q", inspection.Status.State, configkit.LifecycleStateLoaded)
 	}
 	if got := inspection.Redacted["name"]; got != "api" {
 		t.Fatalf("redacted name = %v, want api", got)
 	}
 	inspection.Redacted["name"] = "mutated"
 
-	next := manager.Inspect()
+	next := manager.LifecycleInspection()
 	if got := next.Redacted["name"]; got != "api" {
 		t.Fatalf("redacted name after external mutation = %v, want api", got)
 	}
@@ -257,13 +258,13 @@ func TestManagerConcurrentReadsDuringApply(t *testing.T) {
 			<-start
 
 			for j := 0; j < readerIterations; j++ {
-				status := manager.Status()
+				status := manager.LifecycleStatus()
 				if !validManagerState(status.State) {
 					errs <- errors.New("invalid manager state: " + string(status.State))
 					return
 				}
 
-				inspection := manager.Inspect()
+				inspection := manager.LifecycleInspection()
 				if !validManagerState(inspection.Status.State) {
 					errs <- errors.New("invalid inspection state: " + string(inspection.Status.State))
 					return
@@ -323,8 +324,8 @@ func TestManagerLoadAppliesSuccessfulResult(t *testing.T) {
 	if !result.Apply.Published {
 		t.Fatal("apply published = false, want true")
 	}
-	if status := manager.Status(); status.State != configkit.StatusStateLoaded {
-		t.Fatalf("manager state = %q, want %q", status.State, configkit.StatusStateLoaded)
+	if status := manager.LifecycleStatus(); status.State != configkit.LifecycleStateLoaded {
+		t.Fatalf("manager state = %q, want %q", status.State, configkit.LifecycleStateLoaded)
 	}
 }
 
@@ -344,8 +345,8 @@ func TestManagerLoadFromSourceMissingSourceRecordsFailure(t *testing.T) {
 	if result.Apply.Published {
 		t.Fatal("published = true, want false")
 	}
-	if status := manager.Status(); status.State != configkit.StatusStateFailed {
-		t.Fatalf("manager state = %q, want %q", status.State, configkit.StatusStateFailed)
+	if status := manager.LifecycleStatus(); status.State != configkit.LifecycleStateFailed {
+		t.Fatalf("manager state = %q, want %q", status.State, configkit.LifecycleStateFailed)
 	}
 }
 
@@ -425,6 +426,66 @@ func TestManagerLoadFromSourceMetadataPanicRecordsSourceReadFailure(t *testing.T
 	}
 }
 
+func TestManagerLifecyclePanicPayloadNotExposed(t *testing.T) {
+	const secret = "postgres://user:pass@example/db"
+	panicErr := errors.New(secret)
+	var events []configkit.Event
+	observer := configkit.Observer(func(ctx context.Context, event configkit.Event) {
+		events = append(events, event)
+	})
+	pipeline := testPipeline()
+	pipeline.ValidateConfig = func(ctx context.Context, value stepsTestConfig) error {
+		panic(panicErr)
+	}
+	manager := configkit.NewManager[stepsTestConfig](configkit.WithObservers(observer))
+
+	result, err := manager.Load(context.Background(), configkit.AttemptKindReload, configkit.SourceData{
+		Data: []byte(`{"name":"api","enabled":true,"port":8080}`),
+	}, pipeline)
+	if err == nil {
+		t.Fatal("manager load panic error = nil, want error")
+	}
+	if !errors.Is(err, configkit.ErrLifecyclePanicked) {
+		t.Fatalf("manager load panic error = %v, want configkit.ErrLifecyclePanicked", err)
+	}
+	if errors.Is(err, panicErr) {
+		t.Fatalf("manager load panic error = %v, must not unwrap recovered panic error", err)
+	}
+	assertStringOmits(t, "returned load error", err.Error(), secret)
+	assertStringOmits(t, "load result attempt error", result.Load.Attempt.Error, secret)
+	if result.Load.Attempt.Error != "validate config panicked" {
+		t.Fatalf("attempt error = %q, want safe panic message", result.Load.Attempt.Error)
+	}
+
+	status := manager.LifecycleStatus()
+	if status.LastAttempt == nil {
+		t.Fatal("status last attempt = nil, want failed attempt")
+	}
+	assertStringOmits(t, "manager status", status.LastAttempt.Error, secret)
+	if status.LastFailure == nil {
+		t.Fatal("status last failure = nil, want failed attempt")
+	}
+	assertStringOmits(t, "manager last failure", status.LastFailure.Error, secret)
+
+	inspection := manager.LifecycleInspection()
+	if inspection.Status.LastAttempt == nil {
+		t.Fatal("inspection last attempt = nil, want failed attempt")
+	}
+	assertStringOmits(t, "manager inspection", inspection.Status.LastAttempt.Error, secret)
+
+	if len(events) != 2 {
+		t.Fatalf("event count = %d, want load started and failed", len(events))
+	}
+	failed := events[1]
+	if failed.Kind != configkit.EventKindLoadFailed {
+		t.Fatalf("event kind = %q, want %q", failed.Kind, configkit.EventKindLoadFailed)
+	}
+	if failed.Attempt == nil {
+		t.Fatal("failed event attempt = nil, want attempt")
+	}
+	assertStringOmits(t, "observer event attempt error", failed.Attempt.Error, secret)
+}
+
 func testPipeline() configkit.Pipeline[stepsTestConfig] {
 	return configkit.Pipeline[stepsTestConfig]{
 		Decode:   configkit.JSONDecoder[stepsTestConfig](),
@@ -433,12 +494,12 @@ func testPipeline() configkit.Pipeline[stepsTestConfig] {
 	}
 }
 
-func validManagerState(state configkit.StatusState) bool {
+func validManagerState(state configkit.LifecycleState) bool {
 	switch state {
-	case configkit.StatusStateUnloaded,
-		configkit.StatusStateLoaded,
-		configkit.StatusStateFailed,
-		configkit.StatusStateDegraded:
+	case configkit.LifecycleStateUnloaded,
+		configkit.LifecycleStateLoaded,
+		configkit.LifecycleStateFailed,
+		configkit.LifecycleStateDegraded:
 		return true
 	default:
 		return false
@@ -465,4 +526,12 @@ func (s *countingMetadataSource) Metadata() configkit.SourceMetadata {
 
 func (s *countingMetadataSource) Read(ctx context.Context) (configkit.SourceData, error) {
 	return s.data, nil
+}
+
+func assertStringOmits(t *testing.T, label string, value string, secret string) {
+	t.Helper()
+
+	if strings.Contains(value, secret) {
+		t.Fatalf("%s = %q, must not contain %q", label, value, secret)
+	}
 }
