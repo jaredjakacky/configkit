@@ -405,7 +405,9 @@ and deadline failures are returned as command errors.
 
 The payload does not include typed config values or redacted inspection output.
 It may include attempt status, manager state, revision, checksum, and error
-strings, so those values should be safe for the command audience.
+strings. Normal returned errors are caller-owned operational output and should
+be safe for the command audience. Recovered panic payloads are sanitized into
+safe stage-specific messages.
 
 ## Observability
 
