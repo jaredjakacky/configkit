@@ -77,9 +77,12 @@ Use `EmptyRedactor[T]()` until a field is explicitly safe to expose.
 
 ## Error Strings
 
-Validation errors, source read errors, and recovered panic strings may be
-recorded in attempts, status, logs, telemetry, ops HTTP responses, and reload
-command payloads.
+Validation errors and source read errors may be recorded in attempts, status,
+logs, telemetry, ops HTTP responses, and reload command payloads. Normal
+returned errors are caller-owned operational output.
+
+Recovered panic payloads are not exposed; Configkit records safe
+stage-specific panic messages instead.
 
 Do not include raw secret values in errors.
 
@@ -156,8 +159,9 @@ operational reload metadata:
 - error string
 
 The payload does not include typed config values or redacted inspection output.
-Revisions, checksums, and errors are still visible to whoever can dispatch or
-inspect the command result.
+Revisions, checksums, and normal returned error strings are still visible to
+whoever can dispatch or inspect the command result. Recovered panic payloads are
+sanitized into safe stage-specific messages.
 
 ## Future Operational Endpoints
 

@@ -869,8 +869,9 @@ this repository's `go.mod`.
   - `error`
 
   The payload does not expose typed config values or redacted inspection output.
-  Revisions, checksums, and error strings are still operationally visible and
-  should be safe for the command audience.
+  Revisions, checksums, and normal returned error strings are still
+  operationally visible and should be safe for the command audience. Recovered
+  panic payloads are sanitized into safe stage-specific messages.
 
 - `ReloadCommandOption`
 
@@ -920,8 +921,9 @@ the Workerkit runtime itself in Opskit for readiness and generic inspection;
   - `error`
 
   The payload does not expose typed config values or redacted inspection output.
-  Revisions, checksums, and error strings are still operationally visible and
-  should be safe for the command audience.
+  Revisions, checksums, and normal returned error strings are still
+  operationally visible and should be safe for the command audience. Recovered
+  panic payloads are sanitized into safe stage-specific messages.
 
 - `ReloadCommandOption`
 
