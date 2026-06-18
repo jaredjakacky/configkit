@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 
 	configkit "github.com/jaredjakacky/configkit"
+	opskit "github.com/jaredjakacky/opskit"
 	workerkit "github.com/jaredjakacky/workerkit"
 )
 
@@ -63,7 +63,16 @@ func ReloadCommand[T any](manager *configkit.Manager[T], source configkit.Source
 		Name:        options.name,
 		Description: options.description,
 		Handler: workerkit.CommandHandlerFunc(func(ctx context.Context, req workerkit.CommandRequest) (workerkit.CommandResult, error) {
-			return runReloadCommand(ctx, manager, source, pipeline)
+			command := configkit.ReloadCommand(manager, source, pipeline,
+				configkit.WithReloadCommandName(options.name),
+				configkit.WithReloadCommandDescription(options.description),
+			)
+			result := command.HandleCommand(ctx, opskit.CommandRequest{
+				Name:        req.Name,
+				Payload:     json.RawMessage(req.Payload),
+				RequestedAt: &req.RequestedAt,
+			})
+			return workerResultFromOpskitResult(result)
 		}),
 	}
 }
@@ -75,66 +84,32 @@ func defaultReloadCommandOptions() reloadCommandOptions {
 	}
 }
 
-func runReloadCommand[T any](ctx context.Context, manager *configkit.Manager[T], source configkit.Source, pipeline configkit.Pipeline[T]) (workerkit.CommandResult, error) {
-	if manager == nil {
-		return workerkit.CommandResult{}, errors.New("configkit/worker: missing manager")
+func workerResultFromOpskitResult(result opskit.CommandResult) (workerkit.CommandResult, error) {
+	if !result.Accepted {
+		if result.Message != "" {
+			return workerkit.CommandResult{}, errors.New(result.Message)
+		}
+		return workerkit.CommandResult{}, errors.New("configkit/worker: command was not accepted")
+	}
+	if result.State == opskit.StateFailed && result.Result == nil {
+		switch result.Error {
+		case context.Canceled.Error():
+			return workerkit.CommandResult{}, context.Canceled
+		case context.DeadlineExceeded.Error():
+			return workerkit.CommandResult{}, context.DeadlineExceeded
+		case "":
+			return workerkit.CommandResult{}, errors.New(result.Message)
+		default:
+			return workerkit.CommandResult{}, errors.New(result.Error)
+		}
 	}
 
-	result, loadErr := manager.LoadFromSource(ctx, configkit.AttemptKindReload, source, pipeline)
-	if isCommandContextError(loadErr) {
-		return workerkit.CommandResult{}, loadErr
-	}
-
-	status := manager.LifecycleStatus()
-
-	payload, err := json.Marshal(reloadCommandPayload(result, status, loadErr))
+	payload, err := json.Marshal(result.Result)
 	if err != nil {
-		return workerkit.CommandResult{}, fmt.Errorf("encode config reload result: %w", err)
+		return workerkit.CommandResult{}, errors.New("encode config reload result: " + err.Error())
 	}
-
-	commandResult := workerkit.CommandResult{
-		Message: reloadCommandMessage(result.Load.Attempt.Status),
+	return workerkit.CommandResult{
+		Message: result.Message,
 		Payload: payload,
-	}
-	return commandResult, nil
-}
-
-func isCommandContextError(err error) bool {
-	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
-}
-
-type reloadResultPayload struct {
-	AttemptID       uint64                   `json:"attempt_id,omitempty"`
-	AttemptStatus   configkit.AttemptStatus  `json:"attempt_status"`
-	ManagerState    configkit.LifecycleState `json:"manager_state"`
-	Published       bool                     `json:"published"`
-	Changed         bool                     `json:"changed"`
-	CurrentChecksum string                   `json:"current_checksum,omitempty"`
-	CurrentRevision string                   `json:"current_revision,omitempty"`
-	Error           string                   `json:"error,omitempty"`
-}
-
-func reloadCommandPayload[T any](result configkit.ManagedLoadResult[T], status configkit.LifecycleStatus, loadErr error) reloadResultPayload {
-	payload := reloadResultPayload{
-		AttemptID:     result.Load.Attempt.ID,
-		AttemptStatus: result.Load.Attempt.Status,
-		ManagerState:  status.State,
-		Published:     result.Apply.Published,
-		Changed:       result.Apply.Changed,
-	}
-	if result.Apply.Current != nil {
-		payload.CurrentChecksum = result.Apply.Current.Checksum
-		payload.CurrentRevision = result.Apply.Current.Revision
-	}
-	if loadErr != nil {
-		payload.Error = loadErr.Error()
-	}
-	return payload
-}
-
-func reloadCommandMessage(status configkit.AttemptStatus) string {
-	if status == configkit.AttemptStatusSucceeded {
-		return "config reload succeeded"
-	}
-	return "config reload failed"
+	}, nil
 }

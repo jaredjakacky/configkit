@@ -144,13 +144,15 @@ routes, or rebuild clients.
 Common trigger owners:
 
 - application startup code for initial load
-- Workerkit commands for operator-triggered reload
+- Opskit commands for operator-triggered reload
+- Workerkit command dispatch for runtime execution
 - application-specific signal handlers
 - deployment hooks
 - custom source watchers outside Configkit core
 
-Use `configkit/worker` when Workerkit should expose reload as an operational
-command.
+Use root `configkit.ReloadCommand` to expose reload through Opskit's command
+contracts. Use `configkit/worker` when Workerkit should dispatch that reload as
+an operational command.
 
 ## Examples
 

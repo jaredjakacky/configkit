@@ -76,7 +76,9 @@ func WithAttemptHistoryLimit(limit int) ManagerOption {
 
 // WithIdentity sets the Opskit component name for the manager.
 //
-// The default name is "config". Empty names are ignored.
+// The default name is "config". Empty names are ignored. Non-empty names should
+// satisfy Opskit component-name rules; invalid names may fail when the manager
+// is registered with an Opskit registry.
 func WithIdentity(name string) ManagerOption {
 	return func(options *managerOptions) {
 		if name == "" {
@@ -90,7 +92,9 @@ func WithIdentity(name string) ManagerOption {
 // WithComponentInfo sets the Opskit component identity for the manager.
 //
 // Empty fields fall back to Configkit defaults. Labels are appended to stable
-// Configkit labels; the kit=configkit label is always preserved.
+// Configkit labels; the kit=configkit label is always preserved. Non-empty
+// component names should satisfy Opskit component-name rules; invalid names may
+// fail when the manager is registered with an Opskit registry.
 func WithComponentInfo(info opskit.ComponentInfo) ManagerOption {
 	return func(options *managerOptions) {
 		options.componentInfo = info

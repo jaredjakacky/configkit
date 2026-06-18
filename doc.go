@@ -29,6 +29,7 @@
 // packages that need current configuration state or safe lifecycle inspection
 // without mutating configuration lifecycle state. Manager also directly
 // implements Opskit's Component, ReadinessContributor, and Inspector contracts.
+// ReloadCommand exposes reload as an Opskit CommandHandler and CommandDescriber.
 // Operational views do not expose the typed configuration value, but they can
 // include caller-provided metadata, revisions, redacted values, and error
 // strings.

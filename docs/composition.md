@@ -122,9 +122,17 @@ server := servekit.New(
 )
 ```
 
-## Reload Commands with Workerkit
+## Reload Commands
 
-Use `configkit/worker` when reload should be exposed as a Workerkit command:
+Root Configkit exposes reload as an Opskit command handler:
+
+```go
+reload := configkit.ReloadCommand(manager, source, pipeline)
+ops.MustRegister(reload, opskit.Informational())
+```
+
+Use `configkit/worker` when that reload command should be dispatched through a
+Workerkit runtime today:
 
 ```go
 err := runtime.Register(workerkit.WorkerSpec{
@@ -137,7 +145,8 @@ err := runtime.Register(workerkit.WorkerSpec{
 
 Workerkit v0.2.0 runtimes implement Opskit component, readiness, and inspection
 contracts directly. Register the runtime in the same Opskit registry as the
-Configkit manager, then keep `configkit/worker` focused on the reload command.
+Configkit manager and reload command handler, then keep `configkit/worker`
+focused on Workerkit dispatch.
 
 Default command name:
 
@@ -151,9 +160,9 @@ The command calls:
 manager.LoadFromSource(ctx, configkit.AttemptKindReload, source, pipeline)
 ```
 
-Failed reloads return a successful Workerkit command result containing failure
-metadata. That preserves the command payload and lets Configkit report degraded
-state without treating every failed reload as a Workerkit dispatch failure.
+Failed reloads return a completed command result containing failure metadata.
+That preserves the command payload and lets Configkit report degraded state
+without treating every failed reload as a dispatch failure.
 
 ## Full Production Shape
 
@@ -165,7 +174,8 @@ A typical composed service has:
 - Workerkit runtime for operational commands
 - `servekit.WithOps` for shared readiness and generic component inspection
 - optional `opshttp.Mount` for read-only Configkit-specific inspection
-- `worker.ReloadCommand` for reload
+- `configkit.ReloadCommand` for the Opskit reload command
+- optional `worker.ReloadCommand` for Workerkit dispatch
 - app routes that read current config through `manager.Value()`
 
 This keeps the ownership clear:

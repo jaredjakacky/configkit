@@ -141,9 +141,10 @@ opshttp.Mount(server, manager,
 )
 ```
 
-## Worker Reload Command
+## Reload Command
 
-`configkit/worker.ReloadCommand` returns operational reload metadata:
+`configkit.ReloadCommand` and `configkit/worker.ReloadCommand` return
+operational reload metadata:
 
 - attempt ID
 - attempt status
