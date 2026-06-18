@@ -59,14 +59,15 @@ func ReloadCommand[T any](manager *configkit.Manager[T], source configkit.Source
 		}
 	}
 
+	command := configkit.ReloadCommand(manager, source, pipeline,
+		configkit.WithReloadCommandName(options.name),
+		configkit.WithReloadCommandDescription(options.description),
+	)
+
 	return workerkit.CommandSpec{
 		Name:        options.name,
 		Description: options.description,
 		Handler: workerkit.CommandHandlerFunc(func(ctx context.Context, req workerkit.CommandRequest) (workerkit.CommandResult, error) {
-			command := configkit.ReloadCommand(manager, source, pipeline,
-				configkit.WithReloadCommandName(options.name),
-				configkit.WithReloadCommandDescription(options.description),
-			)
 			result := command.HandleCommand(ctx, opskit.CommandRequest{
 				Name:        req.Name,
 				Payload:     json.RawMessage(req.Payload),

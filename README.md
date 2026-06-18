@@ -371,8 +371,9 @@ failures are returned as failed command results with no result payload.
 
 The result payload is `configkit.ReloadCommandResult`. It does not include typed
 config values or redacted inspection output. It may include attempt status,
-manager state, revision, checksum, and sanitized error strings, so those values
-should be safe for the command audience.
+manager state, revision, checksum, and error strings. Normal returned errors
+are caller-owned operational output and should be safe for the command audience.
+Recovered panic payloads are sanitized into safe stage-specific messages.
 
 ## Workerkit reload command adapter
 

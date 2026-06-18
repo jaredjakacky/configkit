@@ -188,12 +188,13 @@ func (h *ReloadCommandHandler[T]) HandleCommand(ctx context.Context, request ops
 	return opskit.CompletedCommand(reloadCommandMessage(result.Load.Attempt.Status), payload, duration, opskit.Attr("command", "reload"))
 }
 
-// ReloadCommandResult is the safe operational result payload for a Configkit
-// reload command.
+// ReloadCommandResult is the operational result payload for a Configkit reload
+// command.
 //
 // It intentionally excludes typed configuration values and redacted inspection
-// output. Revisions, checksums, and error strings are still operationally
-// visible and should be safe for the command audience.
+// output. Revisions, checksums, and normal returned error strings are still
+// operationally visible and should be safe for the command audience. Recovered
+// panic payloads are sanitized into safe stage-specific messages.
 type ReloadCommandResult struct {
 	AttemptID       uint64         `json:"attempt_id,omitempty"`
 	AttemptStatus   AttemptStatus  `json:"attempt_status"`
