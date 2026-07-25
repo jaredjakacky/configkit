@@ -17,6 +17,8 @@ github.com/jaredjakacky/servekit v0.3.0 h1:mFm2hUgQqvLABIedhZKmv4p7sHzyxVtaqPuIX
 github.com/jaredjakacky/servekit v0.3.0/go.mod h1:yTqQQ6mXC2AONfZbV7rO1wnJJ01Ob2LXl1uPUebPCYI=
 github.com/jaredjakacky/workerkit v0.2.0 h1:JPzJTk8a/1eXiGFEeJ38C9Bf+Ji2ZIvlcSbUqqnQveU=
 github.com/jaredjakacky/workerkit v0.2.0/go.mod h1:EQejjdYgM+qm3KnRfU5TgfoqS2eGkwZ0SE2zCN3ncXY=
+github.com/jaredjakacky/workerkit v0.4.0 h1:oJ1kZb0uiOvqZ3uRYUxTZX655b42MgSO1u1vhP7ugBs=
+github.com/jaredjakacky/workerkit v0.4.0/go.mod h1:EQejjdYgM+qm3KnRfU5TgfoqS2eGkwZ0SE2zCN3ncXY=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
