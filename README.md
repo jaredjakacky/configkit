@@ -42,7 +42,7 @@ With one manager and one pipeline, Configkit gives a Go service the configuratio
 - lifecycle status states
 - observer hooks, structured logging, and optional OpenTelemetry
 - optional Servekit operations routes
-- optional Workerkit reload command adapter
+- generic Workerkit execution of the Opskit reload command
 
 That is the lifecycle teams usually rebuild around production services. Configkit makes it the baseline instead of the afterthought.
 
@@ -108,14 +108,15 @@ Optional adapters are imported separately:
 
 ```go
 import opshttp "github.com/jaredjakacky/configkit/opshttp"
-import configworker "github.com/jaredjakacky/configkit/worker"
 import configotel "github.com/jaredjakacky/configkit/otel"
 ```
 
 The root `configkit` package does not import or compile against Servekit,
-Workerkit, or OpenTelemetry. The adapter packages live in this same Go module,
-so their dependencies may appear in `go.mod`, but applications only compile an
-adapter package when they import it.
+Workerkit, or OpenTelemetry. Configkit-specific adapter packages live in this
+same Go module, so their dependencies may appear in `go.mod`, but applications
+only compile an adapter package when they import it. Applications that use
+Workerkit adapt the root Opskit reload command through Workerkit's generic
+command support.
 
 ## Quick Start
 
@@ -375,21 +376,27 @@ manager state, revision, checksum, and error strings. Normal returned errors
 are caller-owned operational output and should be safe for the command audience.
 Recovered panic payloads are sanitized into safe stage-specific messages.
 
-## Workerkit reload command adapter
+## Workerkit reload command execution
 
 Configkit core does not poll, watch files, schedule reloads, or expose HTTP reload routes.
 
-For services that use [Workerkit](https://github.com/jaredjakacky/workerkit), the optional `worker` package exposes configuration reload as a Workerkit command.
-This is package-level optional: applications only compile it when they import
-`configkit/worker`.
+For services that use [Workerkit](https://github.com/jaredjakacky/workerkit),
+adapt the root Opskit reload handler through Workerkit's generic command
+support:
 
 ```go
+reload := configkit.ReloadCommand(manager, source, pipeline)
+descriptors := reload.Commands(ctx)
+if len(descriptors) != 1 {
+	return fmt.Errorf("reload command descriptors = %d, want 1", len(descriptors))
+}
+
 if err := runtime.Register(workerkit.WorkerSpec{
 	Name:        "config",
 	Description: "Owns configuration reload commands.",
 	Worker:      configWorker{},
 }, workerkit.WithCommandSpec(
-	configworker.ReloadCommand(manager, source, pipeline),
+	workerkit.CommandFromOpskit(descriptors[0], reload),
 )); err != nil {
 	log.Fatal(err)
 }
@@ -474,13 +481,15 @@ Configkit is the typed configuration lifecycle shell in the Kit Series.
 Servekit owns inbound HTTP routing, request policy, auth gates, response encoding, readiness endpoints, and HTTP lifecycle. Opskit owns shared operational registry views. Workerkit owns background runtime, commands, reload triggers, scheduling, retries, concurrency, and worker lifecycle. Configkit owns source reads, decoding, defaults, validation, redaction, checksums, snapshots, status, inspection, reload bookkeeping, and observer events.
 
 The primary composition path is Configkit manager to Opskit registry to
-Servekit. In services with Workerkit v0.2.0 or newer, register the Workerkit
+Servekit. In services with Workerkit v0.4.0 or newer, register the Workerkit
 runtime in that same Opskit registry. The
 optional adapters preserve narrower boundaries: `configkit/opshttp` exposes
-Configkit-specific inspection routes, and `configkit/worker` connects Configkit
-reloads to Workerkit commands.
+Configkit-specific inspection routes. Workerkit executes Configkit's root
+Opskit reload command through its generic command adapter.
 
-Core packages stay independently useful. Adapter packages snap them together when the operational integration is common enough to avoid repeating glue code in every service.
+Core packages stay independently useful. Shared Opskit contracts snap them
+together, while specialized adapters remain limited to behavior the generic
+surface does not cover.
 
 ## Examples
 
@@ -507,6 +516,7 @@ The examples build from the smallest typed JSON load to full Kit Series composit
 - [Usage Guide](docs/usage.md): normal source, pipeline, manager, load, and reload path
 - [Lifecycle](docs/lifecycle.md): load stages, apply behavior, status transitions, and context contract
 - [Reloads](docs/reloads.md): last-known-good behavior, attempts, apply results, and change detection
+- [Commands](docs/commands.md): Opskit reload commands and generic Workerkit execution
 - [Operational Safety](docs/operational-safety.md): metadata, revisions, checksums, redaction, errors, logs, telemetry, and ops exposure
 - [Observability](docs/observability.md): observer events, slog, async delivery, and OpenTelemetry
 - [Composition](docs/composition.md): Configkit, Servekit, and Workerkit boundaries

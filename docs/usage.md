@@ -198,20 +198,23 @@ Observers receive lifecycle events:
 Use `SlogObserver` for structured logs, `AsyncObserver` when delivery should
 not block loads, and `otel.NewObserver` for OpenTelemetry.
 
-## Adapters
+## Integrations
 
 Configkit core stays transport-neutral.
 The root `configkit` package does not import or compile against Servekit,
-Workerkit, or OpenTelemetry. The adapter packages live in this same Go module,
-so their dependencies may appear in `go.mod`; applications only compile adapter
-packages they import.
+Workerkit, or OpenTelemetry. Configkit-specific adapter packages live in this
+same Go module, so their dependencies may appear in `go.mod`; applications only
+compile adapter packages they import. Generic Kit Series integration flows
+through Opskit contracts.
 
 For Kit Series services, register the manager in an Opskit registry and pass
 that registry to `servekit.WithOps`. Use `configkit/opshttp` only when Servekit
 should expose Configkit-specific read-only inspection, recent attempts, or
 standalone readiness without Opskit.
 
-Use `configkit/worker` when Workerkit should expose a reload command.
+Use `configkit.ReloadCommand(...)` with
+`workerkit.CommandFromOpskit(...)` when Workerkit should execute a reload
+command.
 
 ## Common Options
 
@@ -226,10 +229,11 @@ Ops HTTP options:
 - `opshttp.WithPathPrefix`
 - `opshttp.WithEndpointOptions`
 
-Worker reload command options:
+Reload command options:
 
-- `worker.WithCommandName`
-- `worker.WithDescription`
+- `configkit.WithReloadCommandName`
+- `configkit.WithReloadCommandDescription`
+- `configkit.WithReloadCommandComponentInfo`
 
 OTel observer options:
 
@@ -239,5 +243,6 @@ OTel observer options:
 
 - [`lifecycle.md`](lifecycle.md)
 - [`reloads.md`](reloads.md)
+- [`commands.md`](commands.md)
 - [`operational-safety.md`](operational-safety.md)
 - [`composition.md`](composition.md)

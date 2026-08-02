@@ -3,7 +3,7 @@
 This is the fast way to orient yourself in Configkit's public API.
 
 It covers the exported surface of the root `configkit` package and the optional
-`opshttp`, `worker`, and `otel` adapter packages.
+`opshttp` and `otel` adapter packages.
 
 Go doc comments remain the canonical symbol-level reference. This file is the
 companion view that groups the exported surface by the decisions you make when
@@ -890,52 +890,9 @@ this repository's `go.mod`.
   Sets the Opskit component identity for the reload command handler. Empty
   fields fall back to Configkit defaults.
 
-## Package `worker`
-
-The `worker` package adapts Configkit reloads into Workerkit commands. It is
-optional at the package level: the root `configkit` package does not import or
-compile against Workerkit, and applications only compile `worker` when they
-import it. Because `worker` lives in this same Go module, Workerkit may still
-appear in this repository's `go.mod`. With Workerkit v0.2.0 or newer, register
-the Workerkit runtime itself in Opskit for readiness and generic inspection;
-`configkit/worker` remains the reload command adapter.
-
-### Reload command
-
-- `ReloadCommand[T](manager, source, pipeline, opts...)`
-
-  Creates a Workerkit command spec backed by the root Configkit Opskit reload
-  command.
-
-  Default command name: `config/reload`
-
-  The command payload includes operational metadata:
-
-  - `attempt_id`
-  - `attempt_status`
-  - `manager_state`
-  - `published`
-  - `changed`
-  - `current_checksum`
-  - `current_revision`
-  - `error`
-
-  The payload does not expose typed config values or redacted inspection output.
-  Revisions, checksums, and normal returned error strings are still
-  operationally visible and should be safe for the command audience. Recovered
-  panic payloads are sanitized into safe stage-specific messages.
-
-- `ReloadCommandOption`
-
-  Reload command configuration hook.
-
-- `WithCommandName(name string)`
-
-  Sets the Workerkit command name. Empty names preserve the default.
-
-- `WithDescription(description string)`
-
-  Sets the command discovery description.
+  Workerkit executes this handler through its generic
+  `workerkit.CommandFromOpskit(...)` adapter. Configkit does not provide a
+  Workerkit-specific command package.
 
 ## Package `otel`
 
@@ -1012,9 +969,10 @@ If you are new to the codebase:
 3. [Usage Guide](usage.md)
 4. [Lifecycle](lifecycle.md)
 5. [Reloads](reloads.md)
-6. [Operational Safety](operational-safety.md)
-7. [Observability](observability.md)
-8. [Composition](composition.md)
-9. [Examples Guide](examples.md)
-10. API Map
-11. [Advanced Guide](advanced.md)
+6. [Commands](commands.md)
+7. [Operational Safety](operational-safety.md)
+8. [Observability](observability.md)
+9. [Composition](composition.md)
+10. [Examples Guide](examples.md)
+11. API Map
+12. [Advanced Guide](advanced.md)

@@ -48,11 +48,9 @@ Workerkit owns:
 
 The root `configkit` package imports Opskit because `Manager[T]` directly
 implements Opskit component, readiness, and inspection contracts. It does not
-import or compile against Servekit, Workerkit, or OpenTelemetry. Optional
-adapter packages connect the kits where the integration is common operational
-plumbing. Those adapter packages live in this same Go module, so their
-dependencies may appear in `go.mod`; applications only compile adapter packages
-they import.
+import or compile against Servekit, Workerkit, or OpenTelemetry.
+Configkit-specific adapter packages remain available for specialized HTTP and
+telemetry behavior. Generic cross-kit composition uses Opskit contracts.
 
 ## Opskit-First Servekit Composition
 
@@ -131,22 +129,27 @@ reload := configkit.ReloadCommand(manager, source, pipeline)
 ops.MustRegister(reload, opskit.Informational())
 ```
 
-Use `configkit/worker` when that reload command should be dispatched through a
-Workerkit runtime today:
+Use Workerkit's generic Opskit command adapter when that reload command should
+be dispatched through a Workerkit runtime:
 
 ```go
+descriptors := reload.Commands(ctx)
+if len(descriptors) != 1 {
+	return fmt.Errorf("reload command descriptors = %d, want 1", len(descriptors))
+}
+
 err := runtime.Register(workerkit.WorkerSpec{
 	Name:   "config",
 	Worker: configWorker{},
 }, workerkit.WithCommandSpec(
-	configworker.ReloadCommand(manager, source, pipeline),
+	workerkit.CommandFromOpskit(descriptors[0], reload),
 ))
 ```
 
-Workerkit v0.2.0 runtimes implement Opskit component, readiness, and inspection
+Workerkit runtimes implement Opskit component, readiness, and inspection
 contracts directly. Register the runtime in the same Opskit registry as the
-Configkit manager and reload command handler, then keep `configkit/worker`
-focused on Workerkit dispatch.
+Configkit manager and reload command handler. Workerkit remains responsible for
+dispatch, admission, timeouts, retries, concurrency, and observation.
 
 Default command name:
 
@@ -175,7 +178,7 @@ A typical composed service has:
 - `servekit.WithOps` for shared readiness and generic component inspection
 - optional `opshttp.Mount` for read-only Configkit-specific inspection
 - `configkit.ReloadCommand` for the Opskit reload command
-- optional `worker.ReloadCommand` for Workerkit dispatch
+- `workerkit.CommandFromOpskit` for Workerkit dispatch
 - app routes that read current config through `manager.Value()`
 
 This keeps the ownership clear:

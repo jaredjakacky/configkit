@@ -115,11 +115,11 @@ You can directly:
 - preserve last-known-good config on failed reloads
 - attach observers
 
-Servekit, Workerkit, and OpenTelemetry integrations are optional adapter
-packages in this same Go module. Their dependencies may appear in `go.mod`
-because they are part of this repository, but applications only compile adapter
-packages they import. For Kit Series services, register the manager with an
-Opskit registry and pass that registry to Servekit.
+Servekit, Workerkit, and OpenTelemetry integrations are optional. Configkit's
+specialized Servekit and OpenTelemetry adapters live in this same Go module;
+Workerkit executes Configkit's Opskit reload command through its generic
+command adapter. For Kit Series services, register the manager with an Opskit
+registry and pass that registry to Servekit.
 
 ## Next Steps
 

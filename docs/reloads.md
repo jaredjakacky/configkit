@@ -151,8 +151,11 @@ Common trigger owners:
 - custom source watchers outside Configkit core
 
 Use root `configkit.ReloadCommand` to expose reload through Opskit's command
-contracts. Use `configkit/worker` when Workerkit should dispatch that reload as
-an operational command.
+contracts. Use `workerkit.CommandFromOpskit` when Workerkit should dispatch that
+reload as an operational command.
+
+See [`commands.md`](commands.md) for the complete Opskit and Workerkit
+composition path.
 
 ## Examples
 

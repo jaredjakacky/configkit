@@ -16,7 +16,7 @@ You are probably in advanced Configkit territory when:
 - redacted views need to match existing operational contracts
 - loads and publication need to be separated with `Load` and `Manager.Apply`
 - observers feed several backends
-- Servekit and Workerkit adapters are composed into a production service
+- Servekit and Workerkit integrations are composed into a production service
 
 ## Custom Sources
 
@@ -188,13 +188,14 @@ Use adapters where they remove repeated operational glue:
 
 - Opskit registry plus `servekit.WithOps` for primary Servekit readiness and inspection
 - `configkit/opshttp` for specialized Configkit HTTP inspection or standalone readiness
-- `configkit/worker` for Workerkit reload commands
+- `configkit.ReloadCommand` plus Workerkit's generic Opskit command adapter for reload execution
 - `configkit/otel` for OpenTelemetry observers
 
 The root `configkit` package does not import or compile against Servekit,
-Workerkit, or OpenTelemetry. These adapter packages live in the same Go module,
-so their dependencies may appear in `go.mod`, but applications only compile
-adapter packages they import.
+Workerkit, or OpenTelemetry. Configkit-specific adapter packages live in the
+same Go module, so their dependencies may appear in `go.mod`, but applications
+only compile adapter packages they import. Workerkit integration uses the
+shared Opskit command contract rather than a Configkit-specific adapter.
 
 Do not push application policy into Configkit core. HTTP auth belongs to
 Servekit. Command dispatch belongs to Workerkit. Backend-specific source
@@ -223,7 +224,9 @@ application or adapter.
 5. Add custom copy or checksum only when the config shape requires it.
 6. Register the manager with Opskit for shared readiness and inspection.
 7. Add `opshttp` only when operators need Configkit-specific HTTP inspection.
-8. Add `worker.ReloadCommand` if operators need command-driven reload.
+8. Adapt `configkit.ReloadCommand` through
+   `workerkit.CommandFromOpskit` if operators need Workerkit-owned command
+   dispatch.
 9. Add OpenTelemetry when the service telemetry backend is ready.
 
 ## Related Material
