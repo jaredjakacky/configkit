@@ -36,7 +36,7 @@ Read the examples in the order listed below. Each one builds on the last. By the
 
 ### Workerkit Integration
 
-**[09-workerkit-reload-command](09-workerkit-reload-command)** — Configkit reload snaps into Workerkit as an operational command. The example performs an initial Configkit load directly, then uses the `config/reload` command for successful and failed reloads, including command payload metadata and last-known-good preservation.
+**[09-workerkit-reload-command](09-workerkit-reload-command)** — Configkit's root Opskit reload handler runs through Workerkit's generic command adapter. The example performs an initial Configkit load directly, then uses the `config/reload` command for successful and failed reloads, including command payload metadata and last-known-good preservation.
 
 ### The Full Picture
 

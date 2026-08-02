@@ -10,6 +10,7 @@ import (
 
 	configkit "github.com/jaredjakacky/configkit"
 	opskit "github.com/jaredjakacky/opskit"
+	workerkit "github.com/jaredjakacky/workerkit"
 )
 
 type reloadCommandTestConfig struct {
@@ -179,6 +180,37 @@ func TestReloadCommandFailedReloadReturnsCompletedResult(t *testing.T) {
 	}
 	if payload.Error == "" {
 		t.Fatal("error = empty, want failure details")
+	}
+}
+
+func TestReloadCommandRunsThroughWorkerkitGenericAdapter(t *testing.T) {
+	manager := loadedReloadCommandManager(t)
+	failingSource := configkit.NewBytesSource(
+		[]byte(`{"name":`),
+		configkit.SourceMetadata{Name: "memory", Kind: "memory"},
+		"rev-2",
+	)
+	reload := configkit.ReloadCommand(manager, failingSource, reloadCommandTestPipeline())
+	descriptors := reload.Commands(context.Background())
+	if len(descriptors) != 1 {
+		t.Fatalf("command descriptors = %d, want 1", len(descriptors))
+	}
+
+	spec := workerkit.CommandFromOpskit(descriptors[0], reload)
+	if spec.Name != "config/reload" || !spec.Dangerous || spec.Idempotent {
+		t.Fatalf("worker command metadata = %+v, want Configkit descriptor metadata", spec)
+	}
+	result, err := spec.Handler.HandleCommand(context.Background(), workerkit.CommandRequest{Name: spec.Name})
+	if err != nil {
+		t.Fatalf("generic Workerkit command error = %v, want completed reload result", err)
+	}
+
+	var payload configkit.ReloadCommandResult
+	if err := json.Unmarshal(result.Payload, &payload); err != nil {
+		t.Fatalf("decode generic Workerkit payload: %v", err)
+	}
+	if payload.AttemptStatus != configkit.AttemptStatusFailed || payload.ManagerState != configkit.LifecycleStateDegraded {
+		t.Fatalf("payload = %+v, want failed reload with degraded last-known-good state", payload)
 	}
 }
 

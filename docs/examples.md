@@ -3,7 +3,7 @@
 Configkit's examples are a guided product tour, not a random pile of demos.
 Start with the smallest useful JSON load, then move outward into file sources,
 redaction, reload semantics, observability, Servekit operations, Workerkit
-reload commands, and full Kit Series composition.
+execution of Opskit reload commands, and full Kit Series composition.
 
 If you want the short directory index instead, use
 [Configkit Examples](../examples/README.md).
@@ -187,7 +187,8 @@ observers, files, or OpenTelemetry.
 
 ### [`examples/09-workerkit-reload-command`](../examples/09-workerkit-reload-command)
 
-**What it demonstrates:** Configkit reload exposed as a Workerkit command.
+**What it demonstrates:** Configkit's root Opskit reload handler executed as a
+Workerkit command through `workerkit.CommandFromOpskit`.
 
 **Run it:**
 
@@ -199,8 +200,8 @@ go run ./examples/09-workerkit-reload-command
 run through Workerkit `config/reload`, showing successful and failed command
 payloads plus last-known-good preservation.
 
-**What to notice:** Workerkit owns command dispatch. Configkit owns reload and
-apply semantics.
+**What to notice:** Workerkit's generic Opskit adapter owns command translation
+and dispatch. Configkit owns reload and apply semantics.
 
 **What this example intentionally does not show:** Servekit, HTTP, files,
 polling, watching, or OpenTelemetry.

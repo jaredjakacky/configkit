@@ -10,7 +10,6 @@ import (
 	"time"
 
 	configkit "github.com/jaredjakacky/configkit"
-	ckworker "github.com/jaredjakacky/configkit/worker"
 	workerkit "github.com/jaredjakacky/workerkit"
 )
 
@@ -60,11 +59,16 @@ func main() {
 	if err != nil {
 		log.Fatalf("create runtime: %v", err)
 	}
+	reload := configkit.ReloadCommand(manager, source, pipeline)
+	descriptors := reload.Commands(ctx)
+	if len(descriptors) != 1 {
+		log.Fatalf("reload command descriptors = %d, want 1", len(descriptors))
+	}
 	if err := runtime.Register(workerkit.WorkerSpec{
 		Name:        "config",
 		Description: "Owns operational config commands.",
 		Worker:      noopWorker{},
-	}, workerkit.WithCommandSpec(ckworker.ReloadCommand(manager, source, pipeline))); err != nil {
+	}, workerkit.WithCommandSpec(workerkit.CommandFromOpskit(descriptors[0], reload))); err != nil {
 		log.Fatalf("register worker: %v", err)
 	}
 	if err := runtime.StartAll(ctx); err != nil {

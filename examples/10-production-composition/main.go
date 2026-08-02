@@ -16,7 +16,6 @@ import (
 
 	configkit "github.com/jaredjakacky/configkit"
 	ckops "github.com/jaredjakacky/configkit/opshttp"
-	ckworker "github.com/jaredjakacky/configkit/worker"
 	opskit "github.com/jaredjakacky/opskit"
 	servekit "github.com/jaredjakacky/servekit"
 	workerkit "github.com/jaredjakacky/workerkit"
@@ -175,11 +174,16 @@ func newWorkerRuntime(ctx context.Context, manager *configkit.Manager[AppConfig]
 	if err != nil {
 		log.Fatalf("create worker runtime: %v", err)
 	}
+	reload := configkit.ReloadCommand(manager, source, pipeline)
+	descriptors := reload.Commands(ctx)
+	if len(descriptors) != 1 {
+		log.Fatalf("reload command descriptors = %d, want 1", len(descriptors))
+	}
 	if err := runtime.Register(workerkit.WorkerSpec{
 		Name:        "config",
 		Description: "Owns configuration reload commands.",
 		Worker:      configWorker{},
-	}, workerkit.WithCommandSpec(ckworker.ReloadCommand(manager, source, pipeline))); err != nil {
+	}, workerkit.WithCommandSpec(workerkit.CommandFromOpskit(descriptors[0], reload))); err != nil {
 		log.Fatalf("register config worker: %v", err)
 	}
 	if err := runtime.StartAll(ctx); err != nil {

@@ -146,8 +146,9 @@ opshttp.Mount(server, manager,
 
 ## Reload Command
 
-`configkit.ReloadCommand` and `configkit/worker.ReloadCommand` return
-operational reload metadata:
+`configkit.ReloadCommand` returns operational reload metadata. Workerkit's
+generic Opskit command adapter JSON-encodes the same payload when Workerkit
+executes the command:
 
 - attempt ID
 - attempt status
