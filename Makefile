@@ -27,6 +27,7 @@ export GOCACHE ?= $(CURDIR)/.cache/go-build
 	test \
 	test-race \
 	coverage \
+	root-deps-check \
 	tidy \
 	tidy-check \
 	govulncheck \
@@ -71,6 +72,19 @@ coverage: ## Run library package tests with coverage output written to coverage.
 	$(GO) test -coverprofile=coverage.out $(COVER_PKGS)
 	$(GO) tool cover -func=coverage.out | tail -1
 
+root-deps-check: ## Verify the root package compiles only Configkit, Opskit, and the standard library.
+	@echo "==> checking root dependency boundary"
+	raw_deps="$$( $(GO) list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' . )"
+	deps="$$( printf '%s\n' "$$raw_deps" | sed '/^$$/d' | sort )"
+	expected="$$( printf '%s\n' \
+		'github.com/jaredjakacky/configkit' \
+		'github.com/jaredjakacky/opskit' )"
+	if [ "$$deps" != "$$expected" ]; then
+		echo "Unexpected non-standard-library packages in the root build:"
+		printf '%s\n' "$$deps"
+		exit 1
+	fi
+
 tidy: ## Run go mod tidy and fail on go.mod/go.sum changes unless allowed.
 	@echo "==> tidy"
 	$(GO) mod tidy
@@ -91,7 +105,7 @@ govulncheck: ## Run the pinned govulncheck tool against the main module packages
 	@echo "==> govulncheck"
 	$(GO) run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) $(PKGS)
 
-verify: fmt-check vet test build-examples tidy-check ## Run the local verification suite.
+verify: fmt-check root-deps-check vet test build-examples tidy-check ## Run the local verification suite.
 	@echo "==> verification passed"
 
 clean: ## Remove local build outputs and caches.

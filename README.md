@@ -111,12 +111,28 @@ import opshttp "github.com/jaredjakacky/configkit/opshttp"
 import configotel "github.com/jaredjakacky/configkit/otel"
 ```
 
-The root `configkit` package does not import or compile against Servekit,
-Workerkit, or OpenTelemetry. Configkit-specific adapter packages live in this
-same Go module, so their dependencies may appear in `go.mod`, but applications
-only compile an adapter package when they import it. Applications that use
-Workerkit adapt the root Opskit reload command through Workerkit's generic
-command support.
+### Dependency model
+
+Configkit intentionally uses one Go module for the root package, optional
+first-party adapters, tests, and runnable examples. This keeps the integrations
+discoverable and versioned with Configkit, so `go.mod` includes dependencies
+used outside the root package, including Servekit, Workerkit, and OpenTelemetry.
+
+Go compiles the packages an application imports, not every package in a module.
+An application that imports only `github.com/jaredjakacky/configkit` compiles
+Configkit, Opskit, and the standard library. It does not compile or link
+Servekit, Workerkit, `configkit/opshttp`, `configkit/otel`, or OpenTelemetry.
+Those modules may still appear in the application's module graph and
+participate in version selection.
+
+Import `configkit/opshttp` or `configkit/otel` explicitly when those
+integrations are needed. Configkit does not provide a Workerkit-specific
+adapter package; Workerkit executes `configkit.ReloadCommand` through the
+shared Opskit command contract.
+
+This one-module policy is deliberate before v1. A future integration with a
+substantially heavier dependency graph or an independent release cadence may
+be moved to a separate module, but package-level adapters remain the default.
 
 ## Quick Start
 
@@ -455,8 +471,9 @@ spans from emitted Configkit events. It does not wrap source reads or pipeline
 steps; application-provided sources, decoders, validators, and other functions
 can create their own spans when execution-level tracing is needed.
 
-This is package-level optional: applications only compile it when they import
-`configkit/otel`.
+This is optional at build time: applications only compile it when they import
+`configkit/otel`. See [Dependency model](#dependency-model) for the distinction
+between Configkit's package build graph and module dependency graph.
 
 ```go
 observer, err := configotel.NewObserver(meter, tracer)

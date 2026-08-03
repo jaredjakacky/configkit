@@ -6,6 +6,11 @@ Every example is runnable, and every example is part of the public documentation
 
 If you want the fuller narrative walkthrough, start with the [Examples Guide](../docs/examples.md).
 
+The examples share Configkit's Go module, so their Servekit and Workerkit
+requirements contribute to the repository's module graph even though root
+Configkit does not compile them. See the root README's
+[dependency model](../README.md#dependency-model) for details.
+
 ## Recommended Order
 
 Read the examples in the order listed below. Each one builds on the last. By the end you will have a complete mental model of how typed configuration becomes production runtime state: source, pipeline, snapshot, manager, status, inspection, observability, HTTP ops, reload commands, and full Kit Series composition.

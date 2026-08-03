@@ -50,7 +50,10 @@ The root `configkit` package imports Opskit because `Manager[T]` directly
 implements Opskit component, readiness, and inspection contracts. It does not
 import or compile against Servekit, Workerkit, or OpenTelemetry.
 Configkit-specific adapter packages remain available for specialized HTTP and
-telemetry behavior. Generic cross-kit composition uses Opskit contracts.
+telemetry behavior. Generic cross-kit composition uses Opskit contracts. See
+the README's [dependency model](../README.md#dependency-model) for why optional
+adapter and example dependencies remain in Configkit's module graph without
+entering the root package's build.
 
 ## Opskit-First Servekit Composition
 

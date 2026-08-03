@@ -191,11 +191,11 @@ Use adapters where they remove repeated operational glue:
 - `configkit.ReloadCommand` plus Workerkit's generic Opskit command adapter for reload execution
 - `configkit/otel` for OpenTelemetry observers
 
-The root `configkit` package does not import or compile against Servekit,
-Workerkit, or OpenTelemetry. Configkit-specific adapter packages live in the
-same Go module, so their dependencies may appear in `go.mod`, but applications
-only compile adapter packages they import. Workerkit integration uses the
-shared Opskit command contract rather than a Configkit-specific adapter.
+These adapters share Configkit's module and release cadence, but only imported
+packages enter an application's build. Workerkit integration uses the shared
+Opskit command contract rather than a Configkit-specific adapter. See the
+README's [dependency model](../README.md#dependency-model) for the complete
+policy and the module-graph tradeoff.
 
 Do not push application policy into Configkit core. HTTP auth belongs to
 Servekit. Command dispatch belongs to Workerkit. Backend-specific source
