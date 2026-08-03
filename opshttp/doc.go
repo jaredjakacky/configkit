@@ -6,10 +6,10 @@
 // state, and Servekit still owns HTTP routing, response encoding, endpoint
 // policy, auth gates, and readiness endpoints.
 //
-// The root configkit package does not import or compile against Servekit.
-// Applications only compile this adapter when they import configkit/opshttp.
-// Because this adapter lives in the same Go module as the root package,
-// Servekit may still appear in this repository's go.mod.
+// The root configkit package does not import this adapter. Applications that
+// import only the root package do not compile or link opshttp or Servekit.
+// Because this adapter shares Configkit's Go module, Servekit remains in the
+// module dependency graph and can participate in version selection.
 //
 // Operational responses can include caller-provided metadata, revisions,
 // checksums, redacted values, and error strings. Protect these routes with

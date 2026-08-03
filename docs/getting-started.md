@@ -115,11 +115,13 @@ You can directly:
 - preserve last-known-good config on failed reloads
 - attach observers
 
-Servekit, Workerkit, and OpenTelemetry integrations are optional. Configkit's
-specialized Servekit and OpenTelemetry adapters live in this same Go module;
-Workerkit executes Configkit's Opskit reload command through its generic
-command adapter. For Kit Series services, register the manager with an Opskit
-registry and pass that registry to Servekit.
+Servekit and OpenTelemetry integrations are optional packages. Workerkit
+executes Configkit's Opskit reload command through its generic command adapter;
+Configkit has no Workerkit-specific package. See the README's
+[dependency model](../README.md#dependency-model) for how the single module
+keeps optional dependencies out of the root package's build while retaining
+them in the module graph. For Kit Series services, register the manager with an
+Opskit registry and pass that registry to Servekit.
 
 ## Next Steps
 

@@ -201,11 +201,11 @@ not block loads, and `otel.NewObserver` for OpenTelemetry.
 ## Integrations
 
 Configkit core stays transport-neutral.
-The root `configkit` package does not import or compile against Servekit,
-Workerkit, or OpenTelemetry. Configkit-specific adapter packages live in this
-same Go module, so their dependencies may appear in `go.mod`; applications only
-compile adapter packages they import. Generic Kit Series integration flows
-through Opskit contracts.
+The root package's compiled non-standard-library boundary is Opskit. Optional
+Servekit and OpenTelemetry packages and the Workerkit examples share
+Configkit's module but do not enter the root package's build. See the README's
+[dependency model](../README.md#dependency-model) for the module-graph
+tradeoff. Generic Kit Series integration flows through Opskit contracts.
 
 For Kit Series services, register the manager in an Opskit registry and pass
 that registry to `servekit.WithOps`. Use `configkit/opshttp` only when Servekit

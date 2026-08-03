@@ -2,9 +2,10 @@
 
 Configkit emits backend-neutral lifecycle events from the root package. HTTP,
 Servekit, Workerkit, and OpenTelemetry are not imported or compiled by the root
-`configkit` package for configuration observability. Optional adapter packages
-live in this same Go module, so adapter dependencies may appear in `go.mod`,
-but applications only compile adapter packages they import.
+`configkit` package for configuration observability. `configkit/otel` is an
+optional package in the same module. See the README's
+[dependency model](../README.md#dependency-model) for the distinction between
+the package build graph and the module dependency graph.
 
 ## Observer Model
 

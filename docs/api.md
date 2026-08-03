@@ -769,9 +769,10 @@ responses as visible to their audience.
 The `opshttp` package provides optional Configkit-specific HTTP inspection for
 Servekit. The primary Kit Series composition path is registering
 `Manager[T]` in an Opskit registry and passing that registry to
-`servekit.WithOps`. Applications only compile `opshttp` when they import it.
-Because `opshttp` lives in this same Go module, Servekit may still appear in
-this repository's `go.mod`.
+`servekit.WithOps`. Applications only compile `opshttp` when they import it;
+Servekit remains in Configkit's module graph because the adapter shares the
+root module. See the README's
+[dependency model](../README.md#dependency-model).
 
 ### Route mounting
 
@@ -899,8 +900,9 @@ this repository's `go.mod`.
 The `otel` package provides a first-party OpenTelemetry observer. It is
 optional at the package level: the root `configkit` package does not import or
 compile against OpenTelemetry, and applications only compile `otel` when they
-import it. Because `otel` lives in this same Go module, OpenTelemetry
-dependencies may still appear in this repository's `go.mod`.
+import it. OpenTelemetry remains in Configkit's module graph because the
+adapter shares the root module. See the README's
+[dependency model](../README.md#dependency-model).
 
 ### Observer
 

@@ -3,10 +3,10 @@
 // This is a first-party optional integration. The root configkit package does
 // not import or compile against OpenTelemetry, and applications that do not
 // import this package do not compile or link it. Because this adapter lives in
-// the same Go module as the root package, OpenTelemetry dependencies may still
-// appear in this repository's go.mod. Keeping it in the same module makes
-// telemetry discoverable and versioned with Configkit while preserving a
-// backend-neutral core package.
+// the same Go module as the root package, OpenTelemetry remains in the module
+// dependency graph and can participate in version selection. Keeping it in the
+// same module makes telemetry discoverable and versioned with Configkit while
+// preserving a backend-neutral core package.
 //
 // The observer records these metrics:
 //
