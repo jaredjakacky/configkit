@@ -74,8 +74,9 @@ configuration into a framework.
 
 - `Pipeline[T].ValidateConfig`
 
-  Optional typed validation step. Validation errors may appear in operational
-  output, so they should not include secrets.
+  Optional typed validation step. Its error is returned privately to the load
+  caller; operational records use the stable `validate_config_failed` failure
+  code and bounded public text.
 
 - `Pipeline[T].Copy`
 
@@ -350,7 +351,9 @@ configuration into a framework.
 - `Manager.Readiness(ctx)`
 
   Returns the manager's configured Opskit readiness. Degraded is ready by
-  default because a last-known-good snapshot remains active.
+  default because a last-known-good snapshot remains active. Configkit has no
+  child readiness domain, so `Items` is empty; the Opskit registry owns the
+  parent component identity and required/optional registration policy.
 
 - `Manager.Inspect(ctx)`
 
@@ -607,10 +610,10 @@ configuration into a framework.
 
   Attempt end time.
 
-- `AttemptRecord.Error`
+- `AttemptRecord.Failure`
 
-  Error string for a failed attempt. It may appear in operational output and
-  should not contain secrets.
+  Stage-specific public `opskit.Failure` for a failed attempt. The underlying
+  error remains on the direct load call's return path and is not serialized.
 
 - `ApplyResult`
 
@@ -658,7 +661,8 @@ configuration into a framework.
 - `Event`
 
   Operational event delivered to observers. It does not expose the typed config
-  value, but it can include metadata, revisions, checksums, and error strings.
+  value or internal errors, but it can include metadata, revisions, checksums,
+  and public failure detail.
 
 - `Event.Kind`
 
@@ -867,12 +871,11 @@ root module. See the README's
   - `changed`
   - `current_checksum`
   - `current_revision`
-  - `error`
+  - `failure`
 
-  The payload does not expose typed config values or redacted inspection output.
-  Revisions, checksums, and normal returned error strings are still
-  operationally visible and should be safe for the command audience. Recovered
-  panic payloads are sanitized into safe stage-specific messages.
+  The payload does not expose typed config values, redacted inspection output,
+  or internal error causes. Revisions, checksums, and public failure detail are
+  operationally visible.
 
 - `ReloadCommandOption`
 
@@ -955,12 +958,23 @@ Default attributes are intentionally low-cardinality:
 - `configkit.attempt.kind`
 - `configkit.attempt.status`
 - `configkit.attempt.stage`
+- `configkit.failure.code` (failed attempts only)
 - `configkit.source.kind`
 - `configkit.apply.changed`
 
 The observer does not record revisions, checksums, raw config data, redacted
 config data, or typed config values. Source kind, optional source name, attempt
-stage/status, and load error strings may be recorded as telemetry data.
+stage/status, and public failure code may be recorded as attributes. A public
+failure message may be recorded as failed-span status/error data.
+
+### Stable failure codes
+
+Configkit exports constants for the public codes it emits. The normal stage
+codes are `source_read_failed`, `pipeline_validate_failed`, `decode_failed`,
+`defaults_failed`, `validate_config_failed`, `copy_failed`, `redact_failed`, and
+`checksum_failed`. Context cancellation and deadline codes are `canceled` and
+`deadline_exceeded`; context, missing-source, and general fallback codes are
+`context_failed`, `missing_source`, `load_failed`, and `reload_failed`.
 
 ## Suggested reading order
 

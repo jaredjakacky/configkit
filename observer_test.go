@@ -38,11 +38,11 @@ func TestEventJSONUsesOperationalFieldNames(t *testing.T) {
 		Source:      configkit.SourceMetadata{Name: "memory", Kind: "memory"},
 		Revision:    "rev-1",
 		Attempt: &configkit.AttemptRecord{
-			ID:     7,
-			Kind:   configkit.AttemptKindReload,
-			Status: configkit.AttemptStatusFailed,
-			Stage:  configkit.AttemptStageDecode,
-			Error:  "decode failed",
+			ID:      7,
+			Kind:    configkit.AttemptKindReload,
+			Status:  configkit.AttemptStatusFailed,
+			Stage:   configkit.AttemptStageDecode,
+			Failure: testFailure("decode failed"),
 		},
 		OccurredAt: snapshotTestMetadata().LoadedAt,
 	}

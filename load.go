@@ -61,7 +61,7 @@ func loadFromSourceWithMetadata[T any](ctx context.Context, kind AttemptKind, so
 				Stage:     AttemptStageSourceRead,
 				StartedAt: startedAt,
 				EndedAt:   time.Now().UTC(),
-				Error:     ErrMissingSource.Error(),
+				Failure:   newFailure(FailureCodeMissingSource, "config source is missing"),
 			},
 		}, ErrMissingSource
 	}
@@ -74,7 +74,7 @@ func loadFromSourceWithMetadata[T any](ctx context.Context, kind AttemptKind, so
 				Stage:     AttemptStageSourceRead,
 				StartedAt: startedAt,
 				EndedAt:   time.Now().UTC(),
-				Error:     metadataErr.Error(),
+				Failure:   attemptFailure(AttemptStageSourceRead, metadataErr),
 			},
 		}, metadataErr
 	}
@@ -91,7 +91,7 @@ func loadFromSourceWithMetadata[T any](ctx context.Context, kind AttemptKind, so
 				Source:    sourceMetadata,
 				StartedAt: startedAt,
 				EndedAt:   time.Now().UTC(),
-				Error:     readErr.Error(),
+				Failure:   attemptFailure(AttemptStageSourceRead, readErr),
 			},
 		}, readErr
 	}
@@ -151,7 +151,7 @@ func load[T any](ctx context.Context, kind AttemptKind, data SourceData, pipelin
 				Revision:  data.Revision,
 				StartedAt: startedAt,
 				EndedAt:   time.Now().UTC(),
-				Error:     err.Error(),
+				Failure:   attemptFailure(stage, err),
 			},
 		}, err
 	}

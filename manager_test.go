@@ -197,6 +197,61 @@ func TestManagerAttemptsReturnsCopy(t *testing.T) {
 	}
 }
 
+func TestManagerApplyDetachesFailureFromCaller(t *testing.T) {
+	manager := configkit.NewManager[stepsTestConfig]()
+	result := failedStatusTestResult("safe failure")
+
+	if _, err := manager.Apply(context.Background(), result); err != nil {
+		t.Fatalf("apply failed result: %v", err)
+	}
+	result.Attempt.Failure.Message = "caller mutation"
+
+	status := manager.LifecycleStatus()
+	if status.LastFailure == nil || failureMessage(status.LastFailure.Failure) != "safe failure" {
+		t.Fatalf("last failure = %+v, want detached safe failure", status.LastFailure)
+	}
+	attempts := manager.Attempts()
+	if len(attempts) != 1 || failureMessage(attempts[0].Failure) != "safe failure" {
+		t.Fatalf("attempts = %+v, want detached safe failure", attempts)
+	}
+}
+
+func TestManagerLoadDetachesFailureFromObserverMutation(t *testing.T) {
+	var secondObserverMessage string
+	observer := configkit.Observer(func(_ context.Context, event configkit.Event) {
+		if event.Kind == configkit.EventKindLoadFailed && event.Attempt != nil && event.Attempt.Failure != nil {
+			event.Attempt.Failure.Message = "observer mutation"
+		}
+	})
+	secondObserver := configkit.Observer(func(_ context.Context, event configkit.Event) {
+		if event.Kind == configkit.EventKindLoadFailed && event.Attempt != nil {
+			secondObserverMessage = failureMessage(event.Attempt.Failure)
+		}
+	})
+	pipeline := testPipeline()
+	pipeline.ValidateConfig = func(context.Context, stepsTestConfig) error {
+		return errors.New("private validation detail")
+	}
+	manager := configkit.NewManager[stepsTestConfig](configkit.WithObservers(observer, secondObserver))
+
+	result, err := manager.Load(context.Background(), configkit.AttemptKindReload, configkit.SourceData{
+		Data: []byte(`{"name":"api","enabled":true,"port":8080}`),
+	}, pipeline)
+	if err == nil {
+		t.Fatal("load error = nil, want validation failure")
+	}
+	if got := failureMessage(result.Load.Attempt.Failure); got != "config validation failed" {
+		t.Fatalf("returned failure = %q, want config validation failed", got)
+	}
+	status := manager.LifecycleStatus()
+	if status.LastFailure == nil || failureMessage(status.LastFailure.Failure) != "config validation failed" {
+		t.Fatalf("last failure = %+v, want detached config validation failure", status.LastFailure)
+	}
+	if secondObserverMessage != "config validation failed" {
+		t.Fatalf("second observer failure = %q, want detached config validation failure", secondObserverMessage)
+	}
+}
+
 func TestManagerInspectReturnsStatusAndRedactedCopy(t *testing.T) {
 	manager := configkit.NewManager[stepsTestConfig]()
 
@@ -452,26 +507,26 @@ func TestManagerLifecyclePanicPayloadNotExposed(t *testing.T) {
 		t.Fatalf("manager load panic error = %v, must not unwrap recovered panic error", err)
 	}
 	assertStringOmits(t, "returned load error", err.Error(), secret)
-	assertStringOmits(t, "load result attempt error", result.Load.Attempt.Error, secret)
-	if result.Load.Attempt.Error != "validate config panicked" {
-		t.Fatalf("attempt error = %q, want safe panic message", result.Load.Attempt.Error)
+	assertStringOmits(t, "load result attempt failure", failureMessage(result.Load.Attempt.Failure), secret)
+	if failureMessage(result.Load.Attempt.Failure) != "config validation failed" {
+		t.Fatalf("attempt failure = %+v, want safe validation failure", result.Load.Attempt.Failure)
 	}
 
 	status := manager.LifecycleStatus()
 	if status.LastAttempt == nil {
 		t.Fatal("status last attempt = nil, want failed attempt")
 	}
-	assertStringOmits(t, "manager status", status.LastAttempt.Error, secret)
+	assertStringOmits(t, "manager status", failureMessage(status.LastAttempt.Failure), secret)
 	if status.LastFailure == nil {
 		t.Fatal("status last failure = nil, want failed attempt")
 	}
-	assertStringOmits(t, "manager last failure", status.LastFailure.Error, secret)
+	assertStringOmits(t, "manager last failure", failureMessage(status.LastFailure.Failure), secret)
 
 	inspection := manager.LifecycleInspection()
 	if inspection.Status.LastAttempt == nil {
 		t.Fatal("inspection last attempt = nil, want failed attempt")
 	}
-	assertStringOmits(t, "manager inspection", inspection.Status.LastAttempt.Error, secret)
+	assertStringOmits(t, "manager inspection", failureMessage(inspection.Status.LastAttempt.Failure), secret)
 
 	if len(events) != 2 {
 		t.Fatalf("event count = %d, want load started and failed", len(events))
@@ -483,7 +538,7 @@ func TestManagerLifecyclePanicPayloadNotExposed(t *testing.T) {
 	if failed.Attempt == nil {
 		t.Fatal("failed event attempt = nil, want attempt")
 	}
-	assertStringOmits(t, "observer event attempt error", failed.Attempt.Error, secret)
+	assertStringOmits(t, "observer event attempt failure", failureMessage(failed.Attempt.Failure), secret)
 }
 
 func testPipeline() configkit.Pipeline[stepsTestConfig] {

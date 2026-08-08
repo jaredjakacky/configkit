@@ -7,6 +7,7 @@ import (
 	"time"
 
 	configkit "github.com/jaredjakacky/configkit"
+	opskit "github.com/jaredjakacky/opskit"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
@@ -188,10 +189,10 @@ func (o *observer) finishLoadSpan(ctx context.Context, event configkit.Event, at
 	span.SetAttributes(attrs...)
 	span.AddEvent(string(event.Kind), trace.WithAttributes(attrs...), trace.WithTimestamp(eventTime(event)))
 	if event.Kind == configkit.EventKindLoadFailed {
-		err := eventError(event)
-		if err != nil {
-			span.RecordError(err, trace.WithTimestamp(eventTime(event)))
-			span.SetStatus(codes.Error, err.Error())
+		message := eventFailureMessage(event)
+		if message != "" {
+			span.RecordError(errors.New(message), trace.WithTimestamp(eventTime(event)))
+			span.SetStatus(codes.Error, message)
 		} else {
 			span.SetStatus(codes.Error, "config load failed")
 		}
@@ -223,6 +224,9 @@ func (o *observer) attrs(event configkit.Event) []attribute.KeyValue {
 	}
 	if stage := attemptStage(event); stage != "" {
 		attrs = append(attrs, attribute.String("configkit.attempt.stage", string(stage)))
+	}
+	if failure := eventFailure(event); failure != nil && failure.Code != "" {
+		attrs = append(attrs, attribute.String("configkit.failure.code", failure.Code))
 	}
 	if source := sourceMetadata(event); source.Kind != "" {
 		attrs = append(attrs, attribute.String("configkit.source.kind", source.Kind))
@@ -318,9 +322,17 @@ func eventTime(event configkit.Event) time.Time {
 	return time.Now()
 }
 
-func eventError(event configkit.Event) error {
-	if event.Attempt == nil || event.Attempt.Error == "" {
+func eventFailureMessage(event configkit.Event) string {
+	failure := eventFailure(event)
+	if failure == nil || failure.Message == "" {
+		return ""
+	}
+	return failure.Message
+}
+
+func eventFailure(event configkit.Event) *opskit.Failure {
+	if event.Attempt == nil {
 		return nil
 	}
-	return errors.New(event.Attempt.Error)
+	return event.Attempt.Failure
 }

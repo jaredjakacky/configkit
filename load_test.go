@@ -101,6 +101,9 @@ func TestLoadReturnsContextFailure(t *testing.T) {
 		t.Fatalf("load canceled error = %v, want context.Canceled", err)
 	}
 	assertFailedAttempt(t, result, configkit.AttemptStageContext)
+	if result.Attempt.Failure.Code != configkit.FailureCodeCanceled {
+		t.Fatalf("attempt failure code = %q, want %q", result.Attempt.Failure.Code, configkit.FailureCodeCanceled)
+	}
 }
 
 func TestLoadReturnsPipelineValidateFailure(t *testing.T) {
@@ -109,6 +112,9 @@ func TestLoadReturnsPipelineValidateFailure(t *testing.T) {
 		t.Fatalf("load missing decoder error = %v, want configkit.ErrMissingDecoder", err)
 	}
 	assertFailedAttempt(t, result, configkit.AttemptStagePipelineValidate)
+	if result.Attempt.Failure.Code != configkit.FailureCodePipelineValidateFailed {
+		t.Fatalf("attempt failure code = %q, want %q", result.Attempt.Failure.Code, configkit.FailureCodePipelineValidateFailed)
+	}
 }
 
 func TestLoadReturnsStageFailures(t *testing.T) {
@@ -118,6 +124,7 @@ func TestLoadReturnsStageFailures(t *testing.T) {
 		name     string
 		pipeline configkit.Pipeline[stepsTestConfig]
 		stage    configkit.AttemptStage
+		wantCode string
 		wantText string
 	}{
 		{
@@ -130,6 +137,7 @@ func TestLoadReturnsStageFailures(t *testing.T) {
 				Checksum: configkit.SHA256JSONChecksum[stepsTestConfig](),
 			},
 			stage:    configkit.AttemptStageDecode,
+			wantCode: configkit.FailureCodeDecodeFailed,
 			wantText: "decode config: stage failed",
 		},
 		{
@@ -140,6 +148,7 @@ func TestLoadReturnsStageFailures(t *testing.T) {
 				}
 			}),
 			stage:    configkit.AttemptStageDefaults,
+			wantCode: configkit.FailureCodeDefaultsFailed,
 			wantText: "apply config defaults: stage failed",
 		},
 		{
@@ -150,6 +159,7 @@ func TestLoadReturnsStageFailures(t *testing.T) {
 				}
 			}),
 			stage:    configkit.AttemptStageValidateConfig,
+			wantCode: configkit.FailureCodeValidateConfigFailed,
 			wantText: "validate config: stage failed",
 		},
 		{
@@ -160,6 +170,7 @@ func TestLoadReturnsStageFailures(t *testing.T) {
 				}
 			}),
 			stage:    configkit.AttemptStageCopy,
+			wantCode: configkit.FailureCodeCopyFailed,
 			wantText: "copy config: stage failed",
 		},
 		{
@@ -170,6 +181,7 @@ func TestLoadReturnsStageFailures(t *testing.T) {
 				}
 			}),
 			stage:    configkit.AttemptStageRedact,
+			wantCode: configkit.FailureCodeRedactFailed,
 			wantText: "redact config: stage failed",
 		},
 		{
@@ -180,6 +192,7 @@ func TestLoadReturnsStageFailures(t *testing.T) {
 				}
 			}),
 			stage:    configkit.AttemptStageChecksum,
+			wantCode: configkit.FailureCodeChecksumFailed,
 			wantText: "checksum config: stage failed",
 		},
 	}
@@ -196,8 +209,14 @@ func TestLoadReturnsStageFailures(t *testing.T) {
 				t.Fatalf("load error = %q, want containing %q", err.Error(), tt.wantText)
 			}
 			assertFailedAttempt(t, result, tt.stage)
-			if result.Attempt.Error != err.Error() {
-				t.Fatalf("attempt error = %q, want %q", result.Attempt.Error, err.Error())
+			if result.Attempt.Failure.Code != tt.wantCode {
+				t.Fatalf("attempt failure code = %q, want %q", result.Attempt.Failure.Code, tt.wantCode)
+			}
+			if result.Attempt.Failure == nil || result.Attempt.Failure.Message == "" {
+				t.Fatalf("attempt failure = %+v, want safe failure", result.Attempt.Failure)
+			}
+			if strings.Contains(result.Attempt.Failure.Message, "stage failed") {
+				t.Fatalf("attempt failure exposed private cause: %+v", result.Attempt.Failure)
 			}
 		})
 	}
@@ -280,7 +299,8 @@ func TestLoadFromSourceMissingSource(t *testing.T) {
 }
 
 func TestLoadFromSourceReadError(t *testing.T) {
-	readErr := errors.New("read failed")
+	const secret = "postgres://user:pass@internal/config"
+	readErr := errors.New("read failed for " + secret)
 	source := fakeSource{
 		metadata: configkit.SourceMetadata{Name: "source-name", Kind: "memory"},
 		readErr:  readErr,
@@ -290,10 +310,16 @@ func TestLoadFromSourceReadError(t *testing.T) {
 	if !errors.Is(err, readErr) {
 		t.Fatalf("load source read error = %v, want readErr", err)
 	}
-	if !strings.Contains(err.Error(), "read config source: read failed") {
-		t.Fatalf("load source read error = %q, want source read prefix", err.Error())
+	if !strings.Contains(err.Error(), secret) {
+		t.Fatalf("private load source error = %q, want original detail", err.Error())
 	}
 	assertFailedAttempt(t, result, configkit.AttemptStageSourceRead)
+	if result.Attempt.Failure.Code != configkit.FailureCodeSourceReadFailed || result.Attempt.Failure.Message != "config source read failed" {
+		t.Fatalf("attempt failure = %+v, want safe source-read failure", result.Attempt.Failure)
+	}
+	if strings.Contains(result.Attempt.Failure.Message, secret) {
+		t.Fatalf("attempt failure exposed private source error: %+v", result.Attempt.Failure)
+	}
 	if result.Attempt.Source != source.metadata {
 		t.Fatalf("attempt source = %+v, want %+v", result.Attempt.Source, source.metadata)
 	}
@@ -376,8 +402,8 @@ func assertFailedAttempt(t *testing.T, result configkit.LoadResult[stepsTestConf
 	if result.Attempt.Stage != stage {
 		t.Fatalf("attempt stage = %q, want %q", result.Attempt.Stage, stage)
 	}
-	if result.Attempt.Error == "" {
-		t.Fatal("attempt error = empty, want error")
+	if result.Attempt.Failure == nil || result.Attempt.Failure.Message == "" {
+		t.Fatal("attempt failure = empty, want failure")
 	}
 	if result.Attempt.StartedAt.IsZero() || result.Attempt.EndedAt.IsZero() {
 		t.Fatalf("attempt times = %v/%v, want non-zero", result.Attempt.StartedAt, result.Attempt.EndedAt)

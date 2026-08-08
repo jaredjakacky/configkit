@@ -10,6 +10,7 @@ import (
 	"time"
 
 	configkit "github.com/jaredjakacky/configkit"
+	opskit "github.com/jaredjakacky/opskit"
 	workerkit "github.com/jaredjakacky/workerkit"
 )
 
@@ -26,7 +27,7 @@ type reloadPayload struct {
 	Changed         bool                     `json:"changed"`
 	CurrentChecksum string                   `json:"current_checksum,omitempty"`
 	CurrentRevision string                   `json:"current_revision,omitempty"`
-	Error           string                   `json:"error,omitempty"`
+	Failure         *opskit.Failure          `json:"failure,omitempty"`
 }
 
 func main() {
@@ -114,8 +115,8 @@ func printPayload(label string, payload reloadPayload) {
 	fmt.Printf("  changed=%t\n", payload.Changed)
 	fmt.Printf("  current_checksum=%s\n", payload.CurrentChecksum)
 	fmt.Printf("  current_revision=%s\n", payload.CurrentRevision)
-	if payload.Error != "" {
-		fmt.Printf("  error=%s\n", payload.Error)
+	if payload.Failure != nil {
+		fmt.Printf("  failure=%s: %s\n", payload.Failure.Code, payload.Failure.Message)
 	}
 }
 

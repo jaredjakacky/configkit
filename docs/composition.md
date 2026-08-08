@@ -76,7 +76,9 @@ server := servekit.New(
 
 Servekit readiness now includes Configkit readiness through Opskit. When admin
 routes are enabled, `/admin/components/config` exposes the manager's Opskit
-component snapshot.
+component snapshot. The registry preserves the Configkit parent identity and
+registration policy; the manager reports only its authoritative aggregate
+readiness because it has no child readiness domain.
 
 Default Configkit readiness policy:
 
@@ -111,8 +113,8 @@ The routes are read-only. They do not expose typed config values and they do not
 trigger reloads.
 
 Read-only does not mean public. LifecycleInspection and attempts can include metadata,
-revisions, checksums, redacted values, and error strings. Protect them with
-Servekit endpoint policy when needed.
+revisions, checksums, redacted values, and public failure detail. Protect them
+with Servekit endpoint policy when needed.
 
 `opshttp.ReadinessCheck` remains available as standalone Servekit support for
 services that are not using an Opskit registry:

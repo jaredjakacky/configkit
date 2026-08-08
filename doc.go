@@ -30,18 +30,20 @@
 // without mutating configuration lifecycle state. Manager also directly
 // implements Opskit's Component, ReadinessContributor, and Inspector contracts.
 // ReloadCommand exposes reload as an Opskit CommandHandler and CommandDescriber.
-// Operational views do not expose the typed configuration value, but they can
-// include caller-provided metadata, revisions, redacted values, and error
-// strings.
+// Operational views do not expose the typed configuration value or arbitrary
+// returned errors, but they can include caller-provided metadata, revisions,
+// redacted values, and stage-specific public failure detail.
 //
 // Treat all operational output as potentially visible to logs, telemetry,
 // diagnostics, support tools, or admin endpoints. Do not put secrets in
-// SourceMetadata, revisions, checksums, validation errors, or source read
-// errors. Redacted views are application-owned; keep Redactor implementations
-// conservative and prefer EmptyRedactor until a field is explicitly safe to
-// expose. Checksums are operational fingerprints, not secret-safe redaction
-// mechanisms, and can leak information for low-entropy values or known config
-// sets. HTTP or admin endpoints that expose LifecycleStatus,
+// SourceMetadata, revisions, checksums, or redacted values. Validation and
+// source-read errors stay on private return channels, but application logging
+// of those errors still needs an appropriate policy. Redacted views are
+// application-owned; keep Redactor implementations conservative and prefer
+// EmptyRedactor until a field is explicitly safe to expose. Checksums are
+// operational fingerprints, not secret-safe redaction mechanisms, and can
+// leak information for low-entropy values or known config sets. HTTP or admin
+// endpoints that expose LifecycleStatus,
 // LifecycleInspection, or Opskit inspection should be protected by the
 // application's routing, authentication, and policy layer.
 //

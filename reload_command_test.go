@@ -140,8 +140,8 @@ func TestReloadCommandSuccessfulReloadPayload(t *testing.T) {
 	if payload.CurrentRevision != "rev-1" {
 		t.Fatalf("current revision = %q, want rev-1", payload.CurrentRevision)
 	}
-	if payload.Error != "" {
-		t.Fatalf("error = %q, want empty", payload.Error)
+	if payload.Failure != nil {
+		t.Fatalf("failure = %+v, want nil", payload.Failure)
 	}
 }
 
@@ -178,8 +178,8 @@ func TestReloadCommandFailedReloadReturnsCompletedResult(t *testing.T) {
 	if payload.CurrentRevision != "rev-1" {
 		t.Fatalf("current revision = %q, want last-known-good rev-1", payload.CurrentRevision)
 	}
-	if payload.Error == "" {
-		t.Fatal("error = empty, want failure details")
+	if payload.Failure == nil {
+		t.Fatal("failure = nil, want safe failure details")
 	}
 }
 
@@ -232,8 +232,8 @@ func TestReloadCommandContextCanceledReturnsFailedCommand(t *testing.T) {
 	if !result.Accepted {
 		t.Fatal("accepted = false, want true")
 	}
-	if result.Error != context.Canceled.Error() {
-		t.Fatalf("error = %q, want context canceled", result.Error)
+	if result.Failure == nil || result.Failure.Code != configkit.FailureCodeCanceled || result.Failure.Message != "config reload canceled" {
+		t.Fatalf("failure = %+v, want canceled", result.Failure)
 	}
 	if result.Result != nil {
 		t.Fatalf("result = %+v, want nil", result.Result)
@@ -255,8 +255,8 @@ func TestReloadCommandContextDeadlineReturnsFailedCommand(t *testing.T) {
 	if result.State != opskit.StateFailed {
 		t.Fatalf("state = %s, want failed", result.State)
 	}
-	if result.Error != context.DeadlineExceeded.Error() {
-		t.Fatalf("error = %q, want deadline exceeded", result.Error)
+	if result.Failure == nil || result.Failure.Code != configkit.FailureCodeDeadlineExceeded || result.Failure.Message != "config reload deadline exceeded" {
+		t.Fatalf("failure = %+v, want deadline exceeded", result.Failure)
 	}
 	if result.Result != nil {
 		t.Fatalf("result = %+v, want nil", result.Result)
@@ -293,8 +293,8 @@ func TestReloadCommandMissingSourceReturnsFailurePayload(t *testing.T) {
 	if payload.ManagerState != configkit.LifecycleStateFailed {
 		t.Fatalf("manager state = %q, want failed", payload.ManagerState)
 	}
-	if !strings.Contains(payload.Error, configkit.ErrMissingSource.Error()) {
-		t.Fatalf("payload error = %q, want missing source", payload.Error)
+	if payload.Failure == nil || payload.Failure.Code != "missing_source" {
+		t.Fatalf("payload failure = %+v, want missing source", payload.Failure)
 	}
 }
 
@@ -321,8 +321,61 @@ func TestReloadCommandPanicPayloadIsSanitized(t *testing.T) {
 		t.Fatalf("command result = %s, must not contain %q", encoded, secret)
 	}
 	payload := reloadCommandPayload(t, result)
-	if payload.Error != "validate config panicked" {
-		t.Fatalf("payload error = %q, want safe panic message", payload.Error)
+	if payload.Failure == nil || payload.Failure.Message != "config validation failed" {
+		t.Fatalf("payload failure = %+v, want safe validation failure", payload.Failure)
+	}
+}
+
+func TestReloadCommandReturnedErrorIsPrivate(t *testing.T) {
+	const secret = "postgres://user:pass@internal/config"
+	manager := configkit.NewManager[reloadCommandTestConfig]()
+	source := configkit.NewBytesSource(
+		[]byte(`{"name":"api","enabled":true,"port":8080}`),
+		configkit.SourceMetadata{Name: "memory", Kind: "memory"},
+		"rev-1",
+	)
+	pipeline := reloadCommandTestPipeline()
+	pipeline.ValidateConfig = func(context.Context, reloadCommandTestConfig) error {
+		return errors.New("validation failed for " + secret)
+	}
+	command := configkit.ReloadCommand(manager, source, pipeline)
+
+	result := command.HandleCommand(context.Background(), opskit.NewCommandRequest("config/reload", nil))
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal command result: %v", err)
+	}
+	if strings.Contains(string(encoded), secret) || strings.Contains(string(encoded), `"error"`) {
+		t.Fatalf("command result exposed private or legacy error data: %s", encoded)
+	}
+	payload := reloadCommandPayload(t, result)
+	if payload.Failure == nil || payload.Failure.Code != configkit.FailureCodeValidateConfigFailed || payload.Failure.Message != "config validation failed" {
+		t.Fatalf("payload failure = %+v, want safe validation failure", payload.Failure)
+	}
+}
+
+func TestNewReloadCommandResultUsesSafeFallbackWhenAttemptHasNoFailure(t *testing.T) {
+	const secret = "postgres://user:pass@internal/config"
+	result := configkit.ManagedLoadResult[reloadCommandTestConfig]{
+		Load: configkit.LoadResult[reloadCommandTestConfig]{
+			Attempt: configkit.AttemptRecord{Status: configkit.AttemptStatusFailed},
+		},
+	}
+
+	payload := configkit.NewReloadCommandResult(
+		result,
+		configkit.LifecycleStatus{State: configkit.LifecycleStateFailed},
+		errors.New(secret),
+	)
+	if payload.Failure == nil || payload.Failure.Code != configkit.FailureCodeReloadFailed || payload.Failure.Message != "config reload failed" {
+		t.Fatalf("payload failure = %+v, want safe reload fallback", payload.Failure)
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if strings.Contains(string(encoded), secret) {
+		t.Fatalf("payload exposed private fallback cause: %s", encoded)
 	}
 }
 

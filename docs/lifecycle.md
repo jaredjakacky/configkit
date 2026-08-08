@@ -24,9 +24,10 @@ Source read failures produce a failed `LoadResult` with:
 - `AttemptStatusFailed`
 - `AttemptStageSourceRead`
 - no snapshot
-- an error string recorded on the attempt
+- a generic source-stage public failure recorded on the attempt
 
-Source errors may appear in operational output. They should not include secrets.
+The original source error is returned directly to the caller but is not copied
+into operational output.
 
 ## Decode
 
@@ -48,9 +49,9 @@ business meaning in application code.
 
 `ValidateConfig` is optional but recommended for production config.
 
-Validation errors are recorded in attempts, status, logs, telemetry, and
-adapter output. Keep them safe for operational audiences. Do not include secret
-values in error strings.
+Validation errors are returned directly to the load caller. Attempts, status,
+logs, telemetry, and adapter output receive only stage-specific public failure
+detail and do not copy arbitrary validation error text.
 
 ## Copy
 

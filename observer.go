@@ -18,8 +18,9 @@ const (
 // Event describes something that happened during the configuration lifecycle.
 //
 // Event is operational data. It does not expose the typed configuration value.
-// It can include caller-provided metadata, revisions, checksums, and error
-// strings that observers may log or export.
+// It can include caller-provided metadata, revisions, checksums, and explicit
+// public failure detail that observers may log or export. Arbitrary returned
+// error strings are not copied into events.
 // AttemptID is a manager-local correlation identifier and may be zero for
 // package-level load results or externally constructed events.
 type Event struct {

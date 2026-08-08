@@ -49,7 +49,7 @@ func TestStatusFailedAfterFailedApplyWithoutCurrentSnapshot(t *testing.T) {
 	if status.LastAttempt == nil || status.LastAttempt.Status != configkit.AttemptStatusFailed {
 		t.Fatalf("last attempt = %+v, want failed attempt", status.LastAttempt)
 	}
-	if status.LastFailure == nil || status.LastFailure.Error != "decode failed" {
+	if status.LastFailure == nil || failureMessage(status.LastFailure.Failure) != "decode failed" {
 		t.Fatalf("last failure = %+v, want recorded failure", status.LastFailure)
 	}
 	if status.LastSuccess != nil {
@@ -111,7 +111,7 @@ func TestStatusDegradedAfterFailedApplyWithCurrentSnapshot(t *testing.T) {
 	if status.LastAttempt == nil || status.LastAttempt.Status != configkit.AttemptStatusFailed {
 		t.Fatalf("last attempt = %+v, want failed attempt", status.LastAttempt)
 	}
-	if status.LastFailure == nil || status.LastFailure.Error != "reload failed" {
+	if status.LastFailure == nil || failureMessage(status.LastFailure.Failure) != "reload failed" {
 		t.Fatalf("last failure = %+v, want recorded failure", status.LastFailure)
 	}
 	if status.LastSuccess == nil || status.LastSuccess.Checksum != "sum-1" {
@@ -186,7 +186,7 @@ func failedStatusTestResult(message string) configkit.LoadResult[stepsTestConfig
 			Revision:  "v2",
 			StartedAt: startedAt,
 			EndedAt:   startedAt.Add(time.Second),
-			Error:     message,
+			Failure:   testFailure(message),
 		},
 	}
 }

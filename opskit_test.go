@@ -128,13 +128,36 @@ func TestManagerOpskitStatusAndReadinessMapLifecycleStates(t *testing.T) {
 			if readiness.Ready != tt.wantReadiness {
 				t.Fatalf("opskit readiness = %v, want %v", readiness.Ready, tt.wantReadiness)
 			}
-			if len(readiness.Components) != 1 {
-				t.Fatalf("readiness component count = %d, want 1", len(readiness.Components))
-			}
-			if readiness.Components[0].State != tt.wantState {
-				t.Fatalf("readiness component state = %s, want %s", readiness.Components[0].State, tt.wantState)
+			if len(readiness.Items) != 0 {
+				t.Fatalf("readiness items = %+v, want no synthetic child items", readiness.Items)
 			}
 		})
+	}
+}
+
+func TestManagerOpskitRegistryOwnsParentReadinessIdentityAndPolicy(t *testing.T) {
+	manager := configkit.NewManager[stepsTestConfig](configkit.WithComponentInfo(opskit.ComponentInfo{
+		Name: "runtime_config",
+		Kind: "configuration",
+	}))
+	registry := opskit.NewRegistry()
+	if err := registry.Register(manager, opskit.Required()); err != nil {
+		t.Fatalf("register manager: %v", err)
+	}
+
+	readiness := registry.Readiness(context.Background())
+	if len(readiness.Components) != 1 {
+		t.Fatalf("component count = %d, want 1", len(readiness.Components))
+	}
+	component := readiness.Components[0]
+	if component.Component.Name != "runtime_config" || component.Component.Kind != "configuration" {
+		t.Fatalf("component identity = %+v, want registered Configkit manager", component.Component)
+	}
+	if component.Registration.ReadinessPolicy != opskit.ReadinessRequired {
+		t.Fatalf("registration policy = %q, want required", component.Registration.ReadinessPolicy)
+	}
+	if len(component.Readiness.Items) != 0 {
+		t.Fatalf("component child items = %+v, want none", component.Readiness.Items)
 	}
 }
 
@@ -181,6 +204,18 @@ func TestManagerOpskitStatusAttributesAreSafe(t *testing.T) {
 		if strings.Contains(string(encoded), unsafe) {
 			t.Fatalf("opskit status = %s, must not contain %q", encoded, unsafe)
 		}
+	}
+
+	inspection, inspectErr := manager.Inspect(context.Background())
+	if inspectErr != nil {
+		t.Fatalf("inspect: %v", inspectErr)
+	}
+	encoded, marshalErr = json.Marshal(inspection)
+	if marshalErr != nil {
+		t.Fatalf("marshal inspection: %v", marshalErr)
+	}
+	if strings.Contains(string(encoded), secret) {
+		t.Fatalf("opskit inspection = %s, must not contain internal error %q", encoded, secret)
 	}
 }
 

@@ -37,7 +37,7 @@ type reloadPayload struct {
 	Changed         bool                     `json:"changed"`
 	CurrentChecksum string                   `json:"current_checksum,omitempty"`
 	CurrentRevision string                   `json:"current_revision,omitempty"`
-	Error           string                   `json:"error,omitempty"`
+	Failure         *opskit.Failure          `json:"failure,omitempty"`
 }
 
 func main() {
@@ -101,9 +101,8 @@ func main() {
 
 	fmt.Printf("2. /message uses typed config: %s\n", get(server, "/message", ""))
 	fmt.Printf("3. /admin/components/config exposes Opskit inspection: %s\n", get(server, "/admin/components/config", "demo"))
-	fmt.Printf("   /admin/components/production exposes Workerkit inspection: %s\n", get(server, "/admin/components/production", "demo"))
+	fmt.Printf("   /admin/components/production exposes Workerkit inspection and command inventory: %s\n", get(server, "/admin/components/production", "demo"))
 	fmt.Printf("   /admin/config exposes Configkit-specific inspection: %s\n", get(server, "/admin/config", "demo"))
-	fmt.Printf("   worker command discovery: %s\n", get(server, "/admin/workers/commands?worker=config", "demo"))
 
 	writeConfig(configPath, AppConfig{
 		ServiceName: "production-demo",
@@ -111,8 +110,14 @@ func main() {
 		Message:     "hello from changed config",
 		APIKey:      "changed-secret",
 	})
-	changed := dispatchReload(ctx, runtime)
-	fmt.Printf("4. reload command applies changed config: %+v\n", changed)
+	changed := dispatchReload(server)
+	fmt.Printf(
+		"4. reload command applies changed config: status=%s state=%s published=%t changed=%t\n",
+		changed.AttemptStatus,
+		changed.ManagerState,
+		changed.Published,
+		changed.Changed,
+	)
 	fmt.Printf("   /message after reload: %s\n", get(server, "/message", ""))
 
 	writeConfig(configPath, AppConfig{
@@ -121,9 +126,19 @@ func main() {
 		Message:     "this invalid config is not published",
 		APIKey:      "invalid-secret",
 	})
-	failed := dispatchReload(ctx, runtime)
+	failed := dispatchReload(server)
 	current, _ := manager.Value()
-	fmt.Printf("5. failed reload preserves last-known-good: %+v\n", failed)
+	fmt.Printf(
+		"5. failed reload preserves last-known-good: status=%s state=%s published=%t changed=%t",
+		failed.AttemptStatus,
+		failed.ManagerState,
+		failed.Published,
+		failed.Changed,
+	)
+	if failed.Failure != nil {
+		fmt.Printf(" failure=%s: %s", failed.Failure.Code, failed.Failure.Message)
+	}
+	fmt.Println()
 	fmt.Printf("   current typed config: service=%s port=%d message=%q\n", current.ServiceName, current.Port, current.Message)
 	fmt.Printf("6. status becomes degraded: %s\n", manager.LifecycleStatus().State)
 	fmt.Printf("   /readyz remains ready by default: %s\n", get(server, "/readyz", ""))
@@ -206,14 +221,32 @@ func (configWorker) Stop(ctx context.Context) error {
 	return nil
 }
 
-func dispatchReload(ctx context.Context, runtime *workerkit.Runtime) reloadPayload {
-	result, err := runtime.Dispatch(ctx, workerkit.CommandRequest{Worker: "config", Name: "config/reload"})
-	if err != nil {
-		log.Fatalf("dispatch config reload: %v", err)
+func dispatchReload(server *servekit.Server) reloadPayload {
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/admin/workers/commands/dispatch",
+		bytes.NewBufferString(`{"worker":"config","name":"config/reload"}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Admin-Token", "demo")
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		log.Fatalf("dispatch config reload: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
+	var response struct {
+		Data struct {
+			Result struct {
+				Payload json.RawMessage `json:"payload"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		log.Fatalf("decode reload command response: %v", err)
+	}
 	var payload reloadPayload
-	if err := json.Unmarshal(result.Payload, &payload); err != nil {
+	if err := json.Unmarshal(response.Data.Result.Payload, &payload); err != nil {
 		log.Fatalf("decode reload payload: %v", err)
 	}
 	return payload

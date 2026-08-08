@@ -4,9 +4,9 @@ module github.com/jaredjakacky/configkit
 go 1.25.0
 
 require (
-	github.com/jaredjakacky/opskit v0.2.0
+	github.com/jaredjakacky/opskit v0.3.0
 	github.com/jaredjakacky/servekit v0.4.0
-	github.com/jaredjakacky/workerkit v0.5.0
+	github.com/jaredjakacky/workerkit v0.6.0
 	go.opentelemetry.io/otel v1.45.0
 	go.opentelemetry.io/otel/metric v1.45.0
 	go.opentelemetry.io/otel/sdk v1.45.0

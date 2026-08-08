@@ -9,8 +9,9 @@ import (
 //
 // If logger is nil, slog.Default is used. The observer logs lifecycle metadata
 // only; it does not log typed configuration values or redacted fields. It may
-// log caller-provided source names, revisions, checksums, and error strings, so
-// those values should be safe for the logger's audience.
+// log caller-provided source names, revisions, checksums, and public failure
+// detail, so those values should be safe for the logger's audience. Arbitrary
+// internal error strings are not copied into events.
 func SlogObserver(logger *slog.Logger) Observer {
 	if logger == nil {
 		logger = slog.Default()
@@ -69,8 +70,13 @@ func appendSlogAttemptAttrs(attrs []slog.Attr, attempt *AttemptRecord) []slog.At
 	if attempt.Stage != "" {
 		attrs = append(attrs, slog.String("attempt_stage", string(attempt.Stage)))
 	}
-	if attempt.Error != "" {
-		attrs = append(attrs, slog.String("attempt_error", attempt.Error))
+	if attempt.Failure != nil {
+		if attempt.Failure.Code != "" {
+			attrs = append(attrs, slog.String("attempt_failure_code", attempt.Failure.Code))
+		}
+		if attempt.Failure.Message != "" {
+			attrs = append(attrs, slog.String("attempt_failure_message", attempt.Failure.Message))
+		}
 	}
 	if !attempt.StartedAt.IsZero() {
 		attrs = append(attrs, slog.Time("attempt_started_at", attempt.StartedAt))

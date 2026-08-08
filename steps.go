@@ -53,9 +53,9 @@ type Copier[T any] func(ctx context.Context, value T) (T, error)
 // Validator checks whether a typed configuration value is valid.
 //
 // A Validator owns validation only. It does not load, decode, redact,
-// snapshot, reload, or decide how configuration is stored. Validation errors
-// may be recorded in status, logs, telemetry, or other operational output; they
-// should not include secret values. Configkit calls Validator with a non-nil
+// snapshot, reload, or decide how configuration is stored. Configkit returns a
+// validation error privately to the load caller and records only stable public
+// failure detail in operational output. Configkit calls Validator with a non-nil
 // context, and direct callers must do the same.
 type Validator[T any] func(ctx context.Context, value T) error
 

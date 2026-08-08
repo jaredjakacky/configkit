@@ -180,7 +180,14 @@ func (h *ReloadCommandHandler[T]) HandleCommand(ctx context.Context, request ops
 	duration := time.Since(startedAt)
 	if isReloadCommandContextError(loadErr) {
 		contextErr := reloadCommandContextError(loadErr)
-		return opskit.FailedCommand(reloadCommandContextMessage(contextErr), contextErr, duration, opskit.Attr("command", "reload"))
+		failure := attemptFailure(AttemptStageContext, contextErr)
+		failure.Message = reloadCommandContextMessage(contextErr)
+		return opskit.FailedCommandWithFailure(
+			failure.Message,
+			*failure,
+			duration,
+			opskit.Attr("command", "reload"),
+		)
 	}
 
 	status := h.manager.LifecycleStatus()
@@ -192,18 +199,18 @@ func (h *ReloadCommandHandler[T]) HandleCommand(ctx context.Context, request ops
 // command.
 //
 // It intentionally excludes typed configuration values and redacted inspection
-// output. Revisions, checksums, and normal returned error strings are still
-// operationally visible and should be safe for the command audience. Recovered
-// panic payloads are sanitized into safe stage-specific messages.
+// output. Revisions, checksums, and public failure detail are still
+// operationally visible. Internal errors and recovered panic payloads are not
+// serialized.
 type ReloadCommandResult struct {
-	AttemptID       uint64         `json:"attempt_id,omitempty"`
-	AttemptStatus   AttemptStatus  `json:"attempt_status"`
-	ManagerState    LifecycleState `json:"manager_state"`
-	Published       bool           `json:"published"`
-	Changed         bool           `json:"changed"`
-	CurrentChecksum string         `json:"current_checksum,omitempty"`
-	CurrentRevision string         `json:"current_revision,omitempty"`
-	Error           string         `json:"error,omitempty"`
+	AttemptID       uint64          `json:"attempt_id,omitempty"`
+	AttemptStatus   AttemptStatus   `json:"attempt_status"`
+	ManagerState    LifecycleState  `json:"manager_state"`
+	Published       bool            `json:"published"`
+	Changed         bool            `json:"changed"`
+	CurrentChecksum string          `json:"current_checksum,omitempty"`
+	CurrentRevision string          `json:"current_revision,omitempty"`
+	Failure         *opskit.Failure `json:"failure,omitempty"`
 }
 
 // NewReloadCommandResult builds the safe operational reload command payload.
@@ -220,7 +227,10 @@ func NewReloadCommandResult[T any](result ManagedLoadResult[T], status Lifecycle
 		payload.CurrentRevision = result.Apply.Current.Revision
 	}
 	if loadErr != nil {
-		payload.Error = loadErr.Error()
+		payload.Failure = cloneFailure(result.Load.Attempt.Failure)
+		if payload.Failure == nil {
+			payload.Failure = newFailure(FailureCodeReloadFailed, "config reload failed")
+		}
 	}
 	return payload
 }
