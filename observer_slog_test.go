@@ -2,7 +2,9 @@ package configkit_test
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -121,9 +123,9 @@ func TestSlogEventAttrsFallsBackToAttemptID(t *testing.T) {
 	observer(context.Background(), configkit.Event{
 		Kind: configkit.EventKindLoadFailed,
 		Attempt: &configkit.AttemptRecord{
-			ID:     42,
-			Status: configkit.AttemptStatusFailed,
-			Error:  "decode failed",
+			ID:      42,
+			Status:  configkit.AttemptStatusFailed,
+			Failure: testFailure("decode failed"),
 		},
 	})
 	attrs := slogRecordAttrs(handler.singleRecord(t))
@@ -131,8 +133,11 @@ func TestSlogEventAttrsFallsBackToAttemptID(t *testing.T) {
 	if got := attrs["attempt_id"].Uint64(); got != 42 {
 		t.Fatalf("attempt_id attr = %d, want 42", got)
 	}
-	if got := attrs["attempt_error"].String(); got != "decode failed" {
-		t.Fatalf("attempt_error attr = %q, want decode failed", got)
+	if got := attrs["attempt_failure_code"].String(); got != "test_failure" {
+		t.Fatalf("attempt_failure_code attr = %q, want test_failure", got)
+	}
+	if got := attrs["attempt_failure_message"].String(); got != "decode failed" {
+		t.Fatalf("attempt_failure_message attr = %q, want decode failed", got)
 	}
 }
 
@@ -151,6 +156,36 @@ func TestSlogEventAttrsOmitRawConfigAndRedactedFields(t *testing.T) {
 		if _, ok := attrs[key]; ok {
 			t.Fatalf("attrs contain %q, want omitted", key)
 		}
+	}
+}
+
+func TestSlogObserverDoesNotExposeReturnedError(t *testing.T) {
+	const secret = "postgres://user:pass@internal/config"
+	handler := &captureSlogHandler{}
+	manager := configkit.NewManager[stepsTestConfig](
+		configkit.WithObservers(configkit.SlogObserver(slog.New(handler))),
+	)
+	pipeline := testPipeline()
+	pipeline.ValidateConfig = func(context.Context, stepsTestConfig) error {
+		return errors.New("validation failed for " + secret)
+	}
+
+	_, err := manager.Load(context.Background(), configkit.AttemptKindReload, configkit.SourceData{
+		Data: []byte(`{"name":"api","enabled":true,"port":8080}`),
+	}, pipeline)
+	if err == nil || !strings.Contains(err.Error(), secret) {
+		t.Fatalf("private load error = %v, want original secret-bearing cause", err)
+	}
+	for _, record := range handler.records {
+		if strings.Contains(record.Message, secret) {
+			t.Fatalf("log message exposed private error: %q", record.Message)
+		}
+		record.Attrs(func(attr slog.Attr) bool {
+			if strings.Contains(attr.Value.String(), secret) {
+				t.Errorf("log attribute %q exposed private error: %s", attr.Key, attr.Value)
+			}
+			return true
+		})
 	}
 }
 

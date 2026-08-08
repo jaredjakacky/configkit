@@ -5,8 +5,8 @@ surfaces. That does not mean every string associated with configuration is safe
 to expose.
 
 Operational output can include caller-provided metadata, revisions, checksums,
-redacted values, and error strings. Treat those fields as visible to their
-audience.
+redacted values, and public failure detail. Treat those fields as visible to
+their audience.
 
 ## What Configkit Does Not Expose
 
@@ -75,16 +75,19 @@ Redact: func(ctx context.Context, cfg AppConfig) (configkit.RedactedView, error)
 Prefer booleans, counts, modes, or safe summaries over masked secret values.
 Use `EmptyRedactor[T]()` until a field is explicitly safe to expose.
 
-## Error Strings
+## Operational Failures
 
-Validation errors and source read errors may be recorded in attempts, status,
-logs, telemetry, ops HTTP responses, and reload command payloads. Normal
-returned errors are caller-owned operational output.
+Validation errors and source read errors are returned to their caller for
+internal diagnosis, but Configkit does not copy their arbitrary text into
+attempts, status, logs, telemetry, ops HTTP responses, or reload command
+payloads. Those surfaces receive a stage-specific public `opskit.Failure`.
 
-Recovered panic payloads are not exposed; Configkit records safe
-stage-specific panic messages instead.
+Recovered panic payloads are not exposed. Direct callers receive a bounded
+stage-specific panic error, while operational surfaces receive the same generic
+stage failure used for ordinary returned errors.
 
-Do not include raw secret values in errors.
+Application logging of returned errors remains outside Configkit and must apply
+the application's private logging policy.
 
 Prefer:
 
@@ -102,9 +105,11 @@ api_key "abc123" is invalid
 
 `SlogObserver` logs lifecycle metadata, not typed config values or redacted
 fields. It can log source metadata, revisions, checksums, attempt stages,
-durations, and error strings.
+durations, and stage-specific public failure detail.
 
-`AsyncObserver` changes delivery behavior only. It does not sanitize event data.
+`AsyncObserver` changes delivery behavior only. It does not sanitize event
+data, but it does clone queued event records and nested failure detail so later
+caller mutation cannot change the delivered event.
 
 Custom observers should follow the same rule: events are operational data, not
 typed config exposure.
@@ -117,7 +122,8 @@ redacted config data, and typed config values.
 Default attributes are low-cardinality. `WithSourceName` is opt-in because
 source names may increase cardinality and may expose caller-provided metadata.
 
-Load error strings may be recorded on failed spans.
+Public failure messages may be recorded on failed spans. Arbitrary returned
+error strings are not recorded.
 
 ## Opskit and Ops HTTP
 
@@ -129,9 +135,9 @@ last apply results, and redacted config values chosen by the application.
 
 `configkit/opshttp` exposes read-only operational state through Servekit.
 
-Routes may include metadata, revisions, checksums, redacted values, and error
-strings. Protect these routes with Servekit endpoint options when they are not
-safe for the default audience.
+Routes may include metadata, revisions, checksums, redacted values, and public
+failure detail. Protect these routes with Servekit endpoint options when they
+are not safe for the default audience.
 
 Example policy:
 
@@ -157,12 +163,11 @@ executes the command:
 - changed
 - current checksum
 - current revision
-- error string
+- public failure code and message
 
-The payload does not include typed config values or redacted inspection output.
-Revisions, checksums, and normal returned error strings are still visible to
-whoever can dispatch or inspect the command result. Recovered panic payloads are
-sanitized into safe stage-specific messages.
+The payload does not include typed config values, redacted inspection output, or
+internal error causes. Revisions, checksums, and public failure detail remain
+visible to whoever can dispatch or inspect the command result.
 
 ## Future Operational Endpoints
 

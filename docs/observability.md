@@ -52,8 +52,8 @@ Events can include:
 - apply result
 - event time
 
-Source metadata, revisions, checksums, and error strings should be safe for the
-observer audience.
+Source metadata, revisions, checksums, and public failure detail should be safe
+for the observer audience. Arbitrary returned error strings are not included.
 
 ## Structured Logs
 

@@ -21,8 +21,8 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	// SlogObserver logs lifecycle metadata such as event kind, source, attempt
-	// status, stage, checksum, and error. It does not log raw typed config
-	// values, so keep source metadata and validation errors operationally safe.
+	// status, stage, checksum, and public failure detail. It does not log raw
+	// typed config or arbitrary returned validation errors.
 	manager := configkit.NewManager[AppConfig](configkit.WithObservers(configkit.SlogObserver(logger)))
 	pipeline := configkit.Pipeline[AppConfig]{
 		Decode: configkit.JSONDecoder[AppConfig](),
@@ -54,7 +54,7 @@ func main() {
 		"reload-v2",
 	)
 	if _, err := manager.LoadFromSource(ctx, configkit.AttemptKindReload, invalidSource, pipeline); err != nil {
-		fmt.Printf("reload failed as expected: %v\n", err)
+		fmt.Println("reload failed as expected; see the safe observer failure fields")
 	}
 	fmt.Printf("final manager status: %s\n", manager.LifecycleStatus().State)
 }

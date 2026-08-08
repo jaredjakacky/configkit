@@ -49,8 +49,7 @@ func main() {
 		configkit.SourceMetadata{Name: "invalid-json", Kind: "memory"},
 		"invalid-v2",
 	)
-	_, reloadErr := manager.LoadFromSource(ctx, configkit.AttemptKindReload, invalidSource, pipeline)
-	if reloadErr == nil {
+	if _, err := manager.LoadFromSource(ctx, configkit.AttemptKindReload, invalidSource, pipeline); err == nil {
 		log.Fatal("reload error = nil, want validation error")
 	}
 
@@ -66,10 +65,10 @@ func main() {
 		log.Fatalf("current config = %+v, want original valid config", current)
 	}
 
-	fmt.Printf("reload error: %v\n", reloadErr)
+	fmt.Println("reload failed as expected")
 	fmt.Printf("manager status: %s\n", status.State)
 	if status.LastFailure != nil {
-		fmt.Printf("last failure: stage=%s error=%s\n", status.LastFailure.Stage, status.LastFailure.Error)
+		fmt.Printf("last failure: stage=%s failure=%+v\n", status.LastFailure.Stage, status.LastFailure.Failure)
 	}
 	fmt.Printf("current config: %+v\n", current)
 	fmt.Println("current config remains the original valid snapshot")

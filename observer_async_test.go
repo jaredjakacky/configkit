@@ -7,6 +7,7 @@ import (
 	"time"
 
 	configkit "github.com/jaredjakacky/configkit"
+	opskit "github.com/jaredjakacky/opskit"
 )
 
 func TestAsyncObserverDeliversEvent(t *testing.T) {
@@ -62,6 +63,38 @@ func TestAsyncObserverDeliveryDetachesContextCancellation(t *testing.T) {
 
 	if err := receiveAsyncValue(t, errs); err != nil {
 		t.Fatalf("delivered context error = %v, want nil", err)
+	}
+}
+
+func TestAsyncObserverDetachesQueuedFailureFromCaller(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	received := make(chan string, 1)
+	async := configkit.NewAsyncObserver(func(_ context.Context, event configkit.Event) {
+		if event.Kind == configkit.EventKindLoadStarted {
+			close(started)
+			<-release
+			return
+		}
+		received <- failureMessage(event.Attempt.Failure)
+	}, configkit.WithAsyncObserverBuffer(1))
+	defer closeAsyncObserver(t, async)
+
+	async.Notify(context.Background(), configkit.Event{Kind: configkit.EventKindLoadStarted})
+	receiveAsyncSignal(t, started)
+
+	event := configkit.Event{
+		Kind: configkit.EventKindLoadFailed,
+		Attempt: &configkit.AttemptRecord{
+			Failure: &opskit.Failure{Code: "safe", Message: "safe failure"},
+		},
+	}
+	async.Notify(context.Background(), event)
+	event.Attempt.Failure.Message = "caller mutation"
+
+	close(release)
+	if got := receiveAsyncValue(t, received); got != "safe failure" {
+		t.Fatalf("queued failure = %q, want detached safe failure", got)
 	}
 }
 

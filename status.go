@@ -5,8 +5,8 @@ package configkit
 // LifecycleStatus is intentionally not generic. It does not expose the typed config
 // value. It is intended for logs, diagnostics, health checks, admin endpoints,
 // and observer payloads, but it can include caller-provided source metadata,
-// revisions, checksums, and error strings. Those fields should be treated as
-// operationally visible and should not contain secrets.
+// revisions, checksums, and explicit public failure detail. Those fields should
+// be treated as operationally visible and should not contain secrets.
 type LifecycleStatus struct {
 	State LifecycleState `json:"state"`
 

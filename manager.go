@@ -282,8 +282,9 @@ func (m *Manager[T]) apply(ctx context.Context, result LoadResult[T]) ApplyResul
 
 	m.mu.Lock()
 
-	attempt := result.Attempt
-	m.lastAttempt = &attempt
+	attempt := cloneAttemptRecord(result.Attempt)
+	lastAttempt := cloneAttemptRecord(attempt)
+	m.lastAttempt = &lastAttempt
 	m.recordAttemptLocked(attempt)
 	current := currentSnapshotMetadata(m.current)
 	applyResult.Previous = cloneSnapshotMetadataPtr(current)
@@ -295,7 +296,7 @@ func (m *Manager[T]) apply(ctx context.Context, result LoadResult[T]) ApplyResul
 		snapshot := *result.Snapshot
 		m.current = &snapshot
 
-		success := attempt
+		success := cloneAttemptRecord(attempt)
 		m.lastSuccess = &success
 
 		metadata := snapshot.Metadata()
@@ -303,13 +304,13 @@ func (m *Manager[T]) apply(ctx context.Context, result LoadResult[T]) ApplyResul
 		applyResult.Current = &metadata
 		applyResult.Changed = applyResult.Previous == nil || applyResult.Previous.Checksum != metadata.Checksum
 
-		attemptCopy := attempt
+		attemptCopy := cloneAttemptRecord(attempt)
 		attemptForEvent = &attemptCopy
 
 		applyCopy := cloneApplyResult(applyResult)
 		applyForEvent = &applyCopy
 	} else if attempt.Status == AttemptStatusFailed {
-		failure := attempt
+		failure := cloneAttemptRecord(attempt)
 		m.lastFailure = &failure
 	}
 
@@ -423,7 +424,7 @@ func (m *Manager[T]) notifyLoadFinished(ctx context.Context, attemptID uint64, k
 		snapshot = &metadata
 	}
 
-	attempt := result.Attempt
+	attempt := cloneAttemptRecord(result.Attempt)
 	m.notify(ctx, Event{
 		Kind:        eventKind,
 		AttemptID:   attemptID,
@@ -441,12 +442,16 @@ func cloneAttemptRecordPtr(in *AttemptRecord) *AttemptRecord {
 		return nil
 	}
 
-	out := *in
+	out := cloneAttemptRecord(*in)
 	return &out
 }
 
 func cloneAttemptRecords(in []AttemptRecord) []AttemptRecord {
-	return append([]AttemptRecord(nil), in...)
+	out := append([]AttemptRecord(nil), in...)
+	for i := range out {
+		out[i] = cloneAttemptRecord(out[i])
+	}
+	return out
 }
 
 func (m *Manager[T]) recordAttemptLocked(attempt AttemptRecord) {
@@ -458,7 +463,7 @@ func (m *Manager[T]) recordAttemptLocked(attempt AttemptRecord) {
 		return
 	}
 
-	m.attemptHistory = append(m.attemptHistory, attempt)
+	m.attemptHistory = append(m.attemptHistory, cloneAttemptRecord(attempt))
 	if len(m.attemptHistory) <= limit {
 		return
 	}
@@ -491,9 +496,23 @@ func (m *Manager[T]) notify(ctx context.Context, event Event) {
 
 	for _, observer := range observers {
 		if observer != nil {
-			notifyObserver(ctx, observer, event)
+			notifyObserver(ctx, observer, cloneEvent(event))
 		}
 	}
+}
+
+func cloneEvent(event Event) Event {
+	out := event
+	out.Attempt = cloneAttemptRecordPtr(event.Attempt)
+	if event.Snapshot != nil {
+		snapshot := *event.Snapshot
+		out.Snapshot = &snapshot
+	}
+	if event.Apply != nil {
+		apply := cloneApplyResult(*event.Apply)
+		out.Apply = &apply
+	}
+	return out
 }
 
 func notifyObserver(ctx context.Context, observer Observer, event Event) {

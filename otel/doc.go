@@ -34,6 +34,7 @@
 //	configkit.attempt.kind
 //	configkit.attempt.status
 //	configkit.attempt.stage
+//	configkit.failure.code (failed attempts only)
 //	configkit.source.kind
 //	configkit.apply.changed
 //
@@ -42,6 +43,7 @@
 // telemetry backend and safe for telemetry. Revision, checksum, raw config
 // data, redacted config data, and typed config values are never recorded by
 // this observer. Source kind, optional source name, attempt stage/status, and
-// load error strings may be recorded as metric attributes, span attributes, or
-// span status/error data.
+// public failure code may be recorded as attributes. Public failure messages
+// may be recorded as span status/error data. Arbitrary internal error strings
+// are not recorded.
 package otel

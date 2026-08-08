@@ -84,7 +84,8 @@ func (o *AsyncObserver) Observer() Observer {
 //
 // Notify is non-blocking. If the queue is full or the observer is closed, the
 // event is dropped. Delivery uses a context detached from cancellation so the
-// event can still be delivered after the load or apply context has ended.
+// event can still be delivered after the load or apply context has ended. The
+// queued event and its nested attempt failure are cloned before Notify returns.
 func (o *AsyncObserver) Notify(ctx context.Context, event Event) {
 	if o == nil || o.observer == nil {
 		return
@@ -104,7 +105,7 @@ func (o *AsyncObserver) Notify(ctx context.Context, event Event) {
 	}
 
 	select {
-	case o.events <- asyncObserverEvent{ctx: ctx, event: event}:
+	case o.events <- asyncObserverEvent{ctx: ctx, event: cloneEvent(event)}:
 	default:
 		o.dropped.Add(1)
 	}

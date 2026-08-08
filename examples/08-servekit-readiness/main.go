@@ -60,7 +60,7 @@ func main() {
 		"reload-v2",
 	)
 	if _, err := manager.LoadFromSource(ctx, configkit.AttemptKindReload, invalidSource, pipeline); err != nil {
-		fmt.Printf("failed reload: %v\n", err)
+		fmt.Println("failed reload recorded with safe operational failure detail")
 	} else {
 		log.Fatal("reload error = nil, want validation error")
 	}

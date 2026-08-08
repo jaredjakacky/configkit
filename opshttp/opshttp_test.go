@@ -114,6 +114,42 @@ func TestMountDoesNotExposeLifecyclePanicPayload(t *testing.T) {
 	assertOpsStringOmits(t, "attempts response body", body, secret)
 }
 
+func TestMountDoesNotExposeReturnedLifecycleError(t *testing.T) {
+	const secret = "postgres://user:pass@internal/config"
+	manager := configkit.NewManager[opsTestConfig]()
+	source := configkit.NewBytesSource(
+		[]byte(`{"name":"api"}`),
+		configkit.SourceMetadata{Name: "memory", Kind: "memory"},
+		"rev-1",
+	)
+	_, err := manager.LoadFromSource(context.Background(), configkit.AttemptKindReload, source, configkit.Pipeline[opsTestConfig]{
+		Decode: configkit.JSONDecoder[opsTestConfig](),
+		ValidateConfig: func(context.Context, opsTestConfig) error {
+			return errors.New("validation failed for " + secret)
+		},
+		Redact:   configkit.EmptyRedactor[opsTestConfig](),
+		Checksum: configkit.SHA256JSONChecksum[opsTestConfig](),
+	})
+	if err == nil || !strings.Contains(err.Error(), secret) {
+		t.Fatalf("private load error = %v, want original secret-bearing cause", err)
+	}
+
+	server := newOpsTestServer()
+	if err := opshttp.Mount(server, manager); err != nil {
+		t.Fatalf("mount: %v", err)
+	}
+	for _, route := range []string{"/admin/config", "/admin/config/attempts"} {
+		body, status := getOpsTestRoute(t, server, route)
+		if status != http.StatusOK {
+			t.Fatalf("%s status = %d, want 200; body = %s", route, status, body)
+		}
+		assertOpsStringOmits(t, route+" response body", body, secret)
+		if strings.Contains(body, `"error"`) {
+			t.Fatalf("%s contains legacy error field: %s", route, body)
+		}
+	}
+}
+
 func TestMountSkipsAttemptsRouteWhenUnavailable(t *testing.T) {
 	server := newOpsTestServer()
 

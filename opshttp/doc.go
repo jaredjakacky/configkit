@@ -12,6 +12,7 @@
 // module dependency graph and can participate in version selection.
 //
 // Operational responses can include caller-provided metadata, revisions,
-// checksums, redacted values, and error strings. Protect these routes with
-// Servekit endpoint options when they are not safe for the default audience.
+// checksums, redacted values, and public failure detail. Protect these routes
+// with Servekit endpoint options when they are not safe for the default
+// audience.
 package opshttp

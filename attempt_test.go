@@ -72,6 +72,37 @@ func TestAttemptStageValues(t *testing.T) {
 	}
 }
 
+func TestFailureCodeValues(t *testing.T) {
+	tests := []struct {
+		name string
+		code string
+		want string
+	}{
+		{name: "canceled", code: configkit.FailureCodeCanceled, want: "canceled"},
+		{name: "deadline exceeded", code: configkit.FailureCodeDeadlineExceeded, want: "deadline_exceeded"},
+		{name: "missing source", code: configkit.FailureCodeMissingSource, want: "missing_source"},
+		{name: "context", code: configkit.FailureCodeContextFailed, want: "context_failed"},
+		{name: "source read", code: configkit.FailureCodeSourceReadFailed, want: "source_read_failed"},
+		{name: "pipeline validate", code: configkit.FailureCodePipelineValidateFailed, want: "pipeline_validate_failed"},
+		{name: "decode", code: configkit.FailureCodeDecodeFailed, want: "decode_failed"},
+		{name: "defaults", code: configkit.FailureCodeDefaultsFailed, want: "defaults_failed"},
+		{name: "validate config", code: configkit.FailureCodeValidateConfigFailed, want: "validate_config_failed"},
+		{name: "copy", code: configkit.FailureCodeCopyFailed, want: "copy_failed"},
+		{name: "redact", code: configkit.FailureCodeRedactFailed, want: "redact_failed"},
+		{name: "checksum", code: configkit.FailureCodeChecksumFailed, want: "checksum_failed"},
+		{name: "load", code: configkit.FailureCodeLoadFailed, want: "load_failed"},
+		{name: "reload", code: configkit.FailureCodeReloadFailed, want: "reload_failed"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.code != tt.want {
+				t.Fatalf("failure code = %q, want %q", tt.code, tt.want)
+			}
+		})
+	}
+}
+
 func TestAttemptRecordJSONFields(t *testing.T) {
 	startedAt := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
 	endedAt := startedAt.Add(time.Second)
@@ -85,7 +116,7 @@ func TestAttemptRecordJSONFields(t *testing.T) {
 		Checksum:  "sum-1",
 		StartedAt: startedAt,
 		EndedAt:   endedAt,
-		Error:     "decode failed",
+		Failure:   testFailure("decode failed"),
 	}
 
 	data, err := json.Marshal(attempt)
@@ -97,7 +128,7 @@ func TestAttemptRecordJSONFields(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("unmarshal attempt JSON: %v", err)
 	}
-	for _, key := range []string{"id", "kind", "status", "stage", "source", "revision", "checksum", "started_at", "ended_at", "error"} {
+	for _, key := range []string{"id", "kind", "status", "stage", "source", "revision", "checksum", "started_at", "ended_at", "failure"} {
 		if _, ok := got[key]; !ok {
 			t.Fatalf("attempt JSON missing key %q in %s", key, data)
 		}
@@ -130,7 +161,7 @@ func TestAttemptRecordJSONOmitEmptyOperationalFields(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("unmarshal attempt JSON: %v", err)
 	}
-	for _, key := range []string{"id", "kind", "stage", "revision", "checksum", "error"} {
+	for _, key := range []string{"id", "kind", "stage", "revision", "checksum", "failure", "error"} {
 		if _, ok := got[key]; ok {
 			t.Fatalf("attempt JSON contains omitted key %q in %s", key, data)
 		}

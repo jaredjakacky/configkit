@@ -66,13 +66,13 @@ and lifecycle handling.
 ## Operational safety
 
 Reload results never contain the typed configuration value or redacted
-inspection view. They can contain revisions, checksums, and application-owned
-error strings. Treat command discovery and results as operational data and
-authorize every dispatch surface accordingly.
+inspection view. They can contain revisions, checksums, and stage-specific
+public failure detail. Treat command discovery and results as operational data
+and authorize every dispatch surface accordingly.
 
 Recovered lifecycle panic payloads are replaced with safe stage-specific text.
-Normal errors returned by sources and pipeline functions remain
-application-owned and must be safe for the command audience.
+Normal errors returned by sources and pipeline functions remain on the direct
+internal return path and are not serialized.
 
 Avoid exposing the same handler through multiple command routes with different
 authorization policies. In the normal Kit Series composition, Workerkit owns

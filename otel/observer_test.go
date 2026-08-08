@@ -2,11 +2,14 @@ package otel_test
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	configkit "github.com/jaredjakacky/configkit"
 	otel "github.com/jaredjakacky/configkit/otel"
+	opskit "github.com/jaredjakacky/opskit"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	metricnoop "go.opentelemetry.io/otel/metric/noop"
@@ -114,6 +117,7 @@ func TestObserverRecordsLoadAndApplySpans(t *testing.T) {
 		"configkit.attempt.kind":   string(configkit.AttemptKindReload),
 		"configkit.attempt.status": string(configkit.AttemptStatusFailed),
 		"configkit.attempt.stage":  string(configkit.AttemptStageDecode),
+		"configkit.failure.code":   configkit.FailureCodeDecodeFailed,
 		"configkit.source.kind":    "memory",
 		"configkit.source.name":    "config-source",
 	})
@@ -178,6 +182,67 @@ func TestObserverRecordsMetrics(t *testing.T) {
 	}
 }
 
+func TestObserverDoesNotExposeReturnedError(t *testing.T) {
+	const secret = "postgres://user:pass@internal/config"
+	recorder := tracetest.NewSpanRecorder()
+	tracerProvider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	defer func() {
+		if err := tracerProvider.Shutdown(context.Background()); err != nil {
+			t.Fatalf("shutdown tracer provider: %v", err)
+		}
+	}()
+	observer, err := otel.NewObserver(
+		metricnoop.NewMeterProvider().Meter("configkit-test"),
+		tracerProvider.Tracer("configkit-test"),
+	)
+	if err != nil {
+		t.Fatalf("new observer: %v", err)
+	}
+	type testConfig struct {
+		Name string `json:"name"`
+	}
+	manager := configkit.NewManager[testConfig](configkit.WithObservers(observer))
+	pipeline := configkit.Pipeline[testConfig]{
+		Decode: configkit.JSONDecoder[testConfig](),
+		ValidateConfig: func(context.Context, testConfig) error {
+			return errors.New("validation failed for " + secret)
+		},
+		Redact:   configkit.EmptyRedactor[testConfig](),
+		Checksum: configkit.SHA256JSONChecksum[testConfig](),
+	}
+
+	_, err = manager.Load(context.Background(), configkit.AttemptKindReload, configkit.SourceData{
+		Data: []byte(`{"name":"api"}`),
+	}, pipeline)
+	if err == nil || !strings.Contains(err.Error(), secret) {
+		t.Fatalf("private load error = %v, want original secret-bearing cause", err)
+	}
+	span := findSpan(t, recorder.Ended(), "configkit.load")
+	if strings.Contains(span.Status().Description, secret) {
+		t.Fatalf("span status exposed private error: %q", span.Status().Description)
+	}
+	assertOtelStringDataOmits(t, span.Attributes(), span.Events(), secret)
+}
+
+func assertOtelStringDataOmits(t *testing.T, attrs []attribute.KeyValue, events []sdktrace.Event, secret string) {
+	t.Helper()
+	for _, attr := range attrs {
+		if attr.Value.Type() == attribute.STRING && strings.Contains(attr.Value.AsString(), secret) {
+			t.Fatalf("span attribute %q exposed private error", attr.Key)
+		}
+	}
+	for _, event := range events {
+		if strings.Contains(event.Name, secret) {
+			t.Fatalf("span event name exposed private error: %q", event.Name)
+		}
+		for _, attr := range event.Attributes {
+			if attr.Value.Type() == attribute.STRING && strings.Contains(attr.Value.AsString(), secret) {
+				t.Fatalf("span event attribute %q exposed private error", attr.Key)
+			}
+		}
+	}
+}
+
 func otelTestEvent(kind configkit.EventKind) configkit.Event {
 	startedAt := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
 	endedAt := startedAt.Add(time.Second)
@@ -202,7 +267,7 @@ func otelTestEvent(kind configkit.EventKind) configkit.Event {
 			Checksum:  "sum-1",
 			StartedAt: startedAt,
 			EndedAt:   endedAt,
-			Error:     "decode failed",
+			Failure:   &opskit.Failure{Code: "decode_failed", Message: "config decode failed"},
 		},
 		Snapshot: &configkit.SnapshotMetadata{
 			Source:   configkit.SourceMetadata{Name: "config-source", Kind: "memory"},

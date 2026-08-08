@@ -46,23 +46,11 @@ func (m *Manager[T]) Status(context.Context) opskit.Status {
 func (m *Manager[T]) Readiness(context.Context) opskit.Readiness {
 	status := m.LifecycleStatus()
 	ready := lifecycleReady(status.State, m.managerDegradedReady())
-	info := m.ComponentInfo()
 	reason := opskitReadinessReason(status.State, ready)
 
 	return opskit.Readiness{
 		Ready:  ready,
 		Reason: reason,
-		Components: []opskit.ReadinessItem{
-			{
-				Name:    info.Name,
-				Kind:    info.Kind,
-				Policy:  opskit.ReadinessRequired,
-				Ready:   ready,
-				State:   opskitStateFromLifecycleState(status.State),
-				Reason:  reason,
-				Message: opskitStatusMessage(status.State, ready),
-			},
-		},
 	}
 }
 

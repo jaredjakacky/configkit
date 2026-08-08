@@ -290,11 +290,14 @@ if _, err := manager.LoadFromSource(ctx, configkit.AttemptKindInitialLoad, valid
 }
 
 if _, err := manager.LoadFromSource(ctx, configkit.AttemptKindReload, invalidSource, pipeline); err != nil {
-	fmt.Printf("reload failed: %v\n", err)
+	fmt.Println("reload failed")
 }
 
 status := manager.LifecycleStatus()
 fmt.Println(status.State) // degraded
+if status.LastFailure != nil {
+	fmt.Println(status.LastFailure.Failure) // safe public code and message
+}
 
 cfg, _ := manager.Value()
 fmt.Printf("still serving from last-known-good config: %+v\n", cfg)
@@ -322,7 +325,12 @@ The safest built-in redactor is `EmptyRedactor[T]`, which exposes no config fiel
 
 Redaction is application-owned. Configkit cannot know which values are safe for logs, support tools, dashboards, or admin endpoints. Keep redactors conservative and expose only fields that are explicitly safe.
 
-Operational output may still include source metadata, revisions, checksums, attempt stages, validation errors, source read errors, and redacted values chosen by the application. Do not put secrets in those fields. Checksums are operational fingerprints, not secrecy mechanisms, and can leak information for low-entropy or known config sets.
+Operational output may still include source metadata, revisions, checksums,
+attempt stages, stage-specific public failure detail, and redacted values chosen
+by the application. Arbitrary validation and source-read error strings remain
+on private return channels. Do not put secrets in public fields. Checksums are
+operational fingerprints, not secrecy mechanisms, and can leak information for
+low-entropy or known config sets.
 
 ## Opskit and Servekit composition
 
@@ -366,7 +374,9 @@ By default, `opshttp.Mount` exposes `GET /admin/config` for `configkit.Lifecycle
 `opshttp.ReadinessCheck` is standalone Servekit support for services that are
 not using an Opskit registry. It follows the manager's core readiness policy.
 
-Operational routes can expose metadata, revisions, checksums, redacted values, and error strings. Protect them with Servekit endpoint options appropriate for the deployment.
+Operational routes can expose metadata, revisions, checksums, redacted values,
+and public failure detail. Protect them with Servekit endpoint options
+appropriate for the deployment.
 
 ## Opskit reload command
 
@@ -388,9 +398,9 @@ failures are returned as failed command results with no result payload.
 
 The result payload is `configkit.ReloadCommandResult`. It does not include typed
 config values or redacted inspection output. It may include attempt status,
-manager state, revision, checksum, and error strings. Normal returned errors
-are caller-owned operational output and should be safe for the command audience.
-Recovered panic payloads are sanitized into safe stage-specific messages.
+manager state, revision, checksum, and a stage-specific public failure. The
+internal returned error is not serialized. Recovered panic payloads are also
+replaced with safe stage-specific failures.
 
 ## Workerkit reload command execution
 
@@ -427,10 +437,8 @@ metadata while Configkit preserves last-known-good state. Context cancellation
 and deadline failures are returned as command errors.
 
 The payload does not include typed config values or redacted inspection output.
-It may include attempt status, manager state, revision, checksum, and error
-strings. Normal returned errors are caller-owned operational output and should
-be safe for the command audience. Recovered panic payloads are sanitized into
-safe stage-specific messages.
+It may include attempt status, manager state, revision, checksum, and a public
+failure. Internal returned errors and recovered panic payloads are not exposed.
 
 ## Observability
 
@@ -498,7 +506,7 @@ Configkit is the typed configuration lifecycle shell in the Kit Series.
 Servekit owns inbound HTTP routing, request policy, auth gates, response encoding, readiness endpoints, and HTTP lifecycle. Opskit owns shared operational registry views. Workerkit owns background runtime, commands, reload triggers, scheduling, retries, concurrency, and worker lifecycle. Configkit owns source reads, decoding, defaults, validation, redaction, checksums, snapshots, status, inspection, reload bookkeeping, and observer events.
 
 The primary composition path is Configkit manager to Opskit registry to
-Servekit. In services with Workerkit v0.4.0 or newer, register the Workerkit
+Servekit. In services with Workerkit v0.6.0 or newer, register the Workerkit
 runtime in that same Opskit registry. The
 optional adapters preserve narrower boundaries: `configkit/opshttp` exposes
 Configkit-specific inspection routes. Workerkit executes Configkit's root

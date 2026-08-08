@@ -87,7 +87,7 @@ effective config checksum did not change.
 - revision
 - checksum
 - start and end timestamps
-- error string on failure
+- public failure code and message
 
 Manager-owned attempts receive fresh manager-local IDs. Package-level `Load`
 and `LoadFromSource` may leave IDs zero.
