@@ -32,6 +32,7 @@ export GOCACHE ?= $(CURDIR)/.cache/go-build
 	tidy-check \
 	govulncheck \
 	verify \
+	release-check \
 	clean
 
 help: ## Show available targets.
@@ -107,6 +108,9 @@ govulncheck: ## Run the pinned govulncheck tool against the main module packages
 
 verify: fmt-check root-deps-check vet test build-examples tidy-check ## Run the local verification suite.
 	@echo "==> verification passed"
+
+release-check: verify test-race govulncheck ## Run all required pre-tag release checks.
+	@echo "==> release checks passed"
 
 clean: ## Remove local build outputs and caches.
 	@echo "==> clean"

@@ -196,12 +196,15 @@ Workerkit command through `workerkit.CommandFromOpskit`.
 go run ./examples/09-workerkit-reload-command
 ```
 
-**Expected output:** Initial load runs directly through Configkit. Later reloads
-run through Workerkit `config/reload`, showing successful and failed command
-payloads plus last-known-good preservation.
+**Expected output:** Initial load runs directly through Configkit. A successful
+Workerkit `config/reload` returns a payload. A failed reload returns a typed
+Workerkit command error with safe failure detail while Configkit preserves the
+last-known-good snapshot and reports degraded manager state.
 
 **What to notice:** Workerkit's generic Opskit adapter owns command translation
-and dispatch. Configkit owns reload and apply semantics.
+and dispatch, failure observation, and configured retry. Configkit owns reload,
+apply, last-known-good, and manager readiness semantics. A command failure does
+not automatically fail Workerkit lifecycle or readiness.
 
 **What this example intentionally does not show:** Servekit, HTTP, files,
 polling, watching, or OpenTelemetry.
@@ -221,8 +224,9 @@ go run ./examples/10-production-composition
 
 **Expected output:** The service starts with valid config, `/message` uses typed
 config, `/admin/config` exposes safe inspection, Workerkit reload applies a
-changed config, failed reload preserves last-known-good config, status becomes
-degraded, and readiness remains ready by default.
+changed config, a failed reload dispatch returns an HTTP command error, the
+last-known-good config remains active, manager status becomes degraded, and
+readiness remains ready by default.
 
 **What to notice:** The kits snap together without blurring ownership.
 Application code still owns domain config and business behavior.

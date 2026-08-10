@@ -33,9 +33,20 @@ into operational output.
 
 `Decode` turns raw `SourceData` into the application config type.
 
-`JSONDecoder[T]` is the built-in JSON decoder. Applications can provide their
-own decoder for YAML, TOML, environment-derived config, merged sources,
-decryption, stricter parsing, or backend-specific formats.
+`JSONDecoder[T]` is the production-oriented built-in JSON decoder. It rejects
+unknown object fields at ordinary Go struct boundaries and accepts exactly one
+JSON value plus surrounding whitespace. `LenientJSONDecoder[T]` preserves the
+previous `json.Unmarshal` behavior when ignoring unknown fields is intentional.
+
+Both decoders otherwise follow `encoding/json`. In particular, field matching
+remains case-insensitive, duplicate keys are accepted with later values
+replacing or merging into earlier values, map keys are unrestricted, and custom
+`UnmarshalJSON` methods own their decoding behavior. Missing fields remain the
+responsibility of defaults and validation.
+
+Applications can provide their own decoder for YAML, TOML,
+environment-derived config, merged sources, decryption, or backend-specific
+formats.
 
 ## Apply Defaults
 
@@ -115,6 +126,9 @@ snapshot, it emits `snapshot_applied`. It does not emit `load_started`,
 `load_succeeded`, or `load_failed` because the load lifecycle happened outside
 the manager-owned `Load` or `LoadFromSource` method.
 
+Manager-owned `Load`, `LoadFromSource`, and `Apply` calls are serialized. Status,
+inspection, snapshot, and value reads remain concurrent.
+
 ## Status Transitions
 
 Initial manager state is `unloaded`.
@@ -174,6 +188,20 @@ This applies to:
 - `Manager.Apply`
 - source `Read` methods
 - pipeline step functions
+
+Waiting for Manager lifecycle admission is context-aware. If a context is
+already canceled or becomes canceled while waiting, `Manager.Load`,
+`Manager.LoadFromSource`, and `Manager.Apply` return the context error with a
+zero result. A call canceled before admission does not receive an attempt ID,
+emit lifecycle events, enter attempt history, update lifecycle status, read
+source metadata or source data, or publish a snapshot.
+
+After admission, cancellation is cooperative. Sources, pipeline steps, and
+observers receive the context, and Configkit checks it between load stages. An
+admitted load failure is recorded normally. Synchronous observers can delay the
+operation and must return; cancellation does not forcibly stop them. An
+admitted `Apply` validates and records or publishes its result without rollback
+if the context is canceled after admission.
 
 ## Examples
 

@@ -72,11 +72,12 @@ type ReloadCommandHandler[T any] struct {
 
 // ReloadCommand creates an Opskit command handler that reloads Configkit state.
 //
-// The command calls Manager.LoadFromSource with AttemptKindReload. Completed
-// reload failures are returned as completed Opskit command results with failure
-// metadata in Result, because Configkit preserves the last-known-good snapshot.
-// Context cancellation and deadline failures are returned as failed command
-// results with no Result payload.
+// The command calls Manager.LoadFromSource with AttemptKindReload. Successful
+// reloads return completed Opskit command results. Admitted reload failures
+// return failed command results with explicit safe public failure detail while
+// the manager independently preserves any last-known-good snapshot. A handler
+// missing its manager, source, or required pipeline steps rejects the command
+// without recording a load attempt.
 func ReloadCommand[T any](manager *Manager[T], source Source, pipeline Pipeline[T], opts ...ReloadCommandOption) *ReloadCommandHandler[T] {
 	options := defaultReloadCommandOptions()
 	for _, opt := range opts {
@@ -143,10 +144,13 @@ func (h *ReloadCommandHandler[T]) ComponentInfo() opskit.ComponentInfo {
 	return cloneOpsComponentInfo(h.componentInfo)
 }
 
-// Status returns whether this reload command handler is configured.
+// Status returns whether this reload command handler is statically usable.
+//
+// Status checks only local handler configuration. It does not read the source,
+// run the pipeline, or mirror manager lifecycle and readiness state.
 func (h *ReloadCommandHandler[T]) Status(context.Context) opskit.Status {
-	if h == nil || h.manager == nil {
-		return opskit.NotReadyStatus("config reload command handler is missing manager", opskit.Attr("command", "reload"))
+	if failure := h.configurationFailure(); failure != nil {
+		return opskit.NotReadyStatus(failure.message, opskit.Attr("command", "reload"))
 	}
 	return opskit.ReadyStatus("config reload command handler ready", opskit.Attr("command", "reload"))
 }
@@ -169,8 +173,15 @@ func (h *ReloadCommandHandler[T]) HandleCommand(ctx context.Context, request ops
 	}
 	startedAt := time.Now()
 
-	if h == nil || h.manager == nil {
-		return opskit.RejectedCommand("config reload command handler is missing manager", opskit.Attr("command", "reload"))
+	if configurationFailure := h.configurationFailure(); configurationFailure != nil {
+		if configurationFailure.failure != nil {
+			return opskit.RejectedCommandWithFailure(
+				configurationFailure.message,
+				*configurationFailure.failure,
+				opskit.Attr("command", "reload"),
+			)
+		}
+		return opskit.RejectedCommand(configurationFailure.message, opskit.Attr("command", "reload"))
 	}
 	if request.Name != h.descriptor.Name {
 		return opskit.RejectedCommand("unsupported config reload command", opskit.Attr("command", "reload"))
@@ -192,11 +203,20 @@ func (h *ReloadCommandHandler[T]) HandleCommand(ctx context.Context, request ops
 
 	status := h.manager.LifecycleStatus()
 	payload := NewReloadCommandResult(result, status, loadErr)
-	return opskit.CompletedCommand(reloadCommandMessage(result.Load.Attempt.Status), payload, duration, opskit.Attr("command", "reload"))
+	if loadErr != nil || result.Load.Attempt.Status != AttemptStatusSucceeded {
+		return opskit.FailedCommandWithFailure(
+			"config reload failed",
+			reloadCommandFailure(payload),
+			duration,
+			opskit.Attr("command", "reload"),
+		)
+	}
+	return opskit.CompletedCommand("config reload succeeded", payload, duration, opskit.Attr("command", "reload"))
 }
 
-// ReloadCommandResult is the operational result payload for a Configkit reload
-// command.
+// ReloadCommandResult is the safe operational view of a Configkit reload.
+// ReloadCommand returns it as Result only for successfully completed commands;
+// NewReloadCommandResult can also build a view of a failed managed load.
 //
 // It intentionally excludes typed configuration values and redacted inspection
 // output. Revisions, checksums, and public failure detail are still
@@ -226,13 +246,46 @@ func NewReloadCommandResult[T any](result ManagedLoadResult[T], status Lifecycle
 		payload.CurrentChecksum = result.Apply.Current.Checksum
 		payload.CurrentRevision = result.Apply.Current.Revision
 	}
-	if loadErr != nil {
+	if loadErr != nil || result.Load.Attempt.Status == AttemptStatusFailed {
 		payload.Failure = cloneFailure(result.Load.Attempt.Failure)
 		if payload.Failure == nil {
 			payload.Failure = newFailure(FailureCodeReloadFailed, "config reload failed")
 		}
 	}
 	return payload
+}
+
+type reloadCommandConfigurationFailure struct {
+	message string
+	failure *opskit.Failure
+}
+
+func (h *ReloadCommandHandler[T]) configurationFailure() *reloadCommandConfigurationFailure {
+	if h == nil || h.manager == nil {
+		return &reloadCommandConfigurationFailure{
+			message: "config reload command handler is missing manager",
+		}
+	}
+	if h.source == nil {
+		return &reloadCommandConfigurationFailure{
+			message: "config reload command handler is missing source",
+			failure: newFailure(FailureCodeMissingSource, "config source is missing"),
+		}
+	}
+	if err := h.pipeline.Validate(); err != nil {
+		return &reloadCommandConfigurationFailure{
+			message: "config reload command handler has invalid pipeline",
+			failure: newFailure(FailureCodePipelineValidateFailed, "config pipeline validation failed"),
+		}
+	}
+	return nil
+}
+
+func reloadCommandFailure(payload ReloadCommandResult) opskit.Failure {
+	if payload.Failure != nil {
+		return *cloneFailure(payload.Failure)
+	}
+	return *newFailure(FailureCodeReloadFailed, "config reload failed")
 }
 
 func isReloadCommandContextError(err error) bool {
@@ -259,11 +312,4 @@ func reloadCommandContextMessage(err error) string {
 	default:
 		return "config reload failed"
 	}
-}
-
-func reloadCommandMessage(status AttemptStatus) string {
-	if status == AttemptStatusSucceeded {
-		return "config reload succeeded"
-	}
-	return "config reload failed"
 }

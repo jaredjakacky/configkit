@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"path"
+	"reflect"
 	"strings"
 
 	configkit "github.com/jaredjakacky/configkit"
@@ -19,7 +20,8 @@ var (
 	// ErrMissingServer is returned when Mount is called without a Servekit server.
 	ErrMissingServer = errors.New("configkit/opshttp: missing server")
 
-	// ErrMissingInspector is returned when Mount is called without a Configkit lifecycle inspector.
+	// ErrMissingInspector is returned when Mount is called with a nil or
+	// typed-nil Configkit lifecycle inspector.
 	ErrMissingInspector = errors.New("configkit/opshttp: missing inspector")
 )
 
@@ -64,11 +66,13 @@ func WithEndpointOptions(opts ...servekit.EndpointOption) Option {
 // Mount always registers GET /admin/config by default, returning
 // configkit.LifecycleInspection. If inspector also implements AttemptProvider, Mount
 // registers GET /admin/config/attempts, returning recent attempt records.
+// Nil and typed-nil inspectors are rejected with ErrMissingInspector before any
+// routes are registered.
 func Mount(server *servekit.Server, inspector configkit.LifecycleInspector, opts ...Option) error {
 	if server == nil {
 		return ErrMissingServer
 	}
-	if inspector == nil {
+	if isNilValue(inspector) {
 		return ErrMissingInspector
 	}
 
@@ -134,13 +138,16 @@ type ReadinessProvider interface {
 // For composed Kit Series services, prefer registering Manager with an Opskit
 // registry and passing that registry to Servekit with servekit.WithOps.
 // ReadinessCheck remains useful for standalone Servekit services that are not
-// using Opskit.
+// using Opskit. Nil and typed-nil providers produce a missing-provider error
+// when the returned check runs.
 func ReadinessCheck(provider ReadinessProvider) servekit.ReadinessCheck {
+	providerMissing := isNilValue(provider)
+
 	return func(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if provider == nil {
+		if providerMissing {
 			return errors.New("configkit/opshttp: readiness provider missing")
 		}
 
@@ -153,5 +160,19 @@ func ReadinessCheck(provider ReadinessProvider) servekit.ReadinessCheck {
 		}
 
 		return errors.New("configkit/opshttp: config not ready")
+	}
+}
+
+func isNilValue(value any) bool {
+	if value == nil {
+		return true
+	}
+
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
 	}
 }

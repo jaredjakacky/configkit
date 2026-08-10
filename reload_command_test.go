@@ -11,6 +11,7 @@ import (
 	configkit "github.com/jaredjakacky/configkit"
 	opskit "github.com/jaredjakacky/opskit"
 	workerkit "github.com/jaredjakacky/workerkit"
+	retrykit "github.com/jaredjakacky/workerkit/retry"
 )
 
 type reloadCommandTestConfig struct {
@@ -145,7 +146,7 @@ func TestReloadCommandSuccessfulReloadPayload(t *testing.T) {
 	}
 }
 
-func TestReloadCommandFailedReloadReturnsCompletedResult(t *testing.T) {
+func TestReloadCommandFailedReloadReturnsFailedCommand(t *testing.T) {
 	manager := loadedReloadCommandManager(t)
 	failingSource := configkit.NewBytesSource(
 		[]byte(`{"name":`),
@@ -155,8 +156,8 @@ func TestReloadCommandFailedReloadReturnsCompletedResult(t *testing.T) {
 	command := configkit.ReloadCommand(manager, failingSource, reloadCommandTestPipeline())
 
 	result := command.HandleCommand(context.Background(), opskit.NewCommandRequest("config/reload", nil))
-	if result.State != opskit.StateReady {
-		t.Fatalf("state = %s, want ready completed command", result.State)
+	if result.State != opskit.StateFailed {
+		t.Fatalf("state = %s, want failed command", result.State)
 	}
 	if !result.Accepted {
 		t.Fatal("accepted = false, want true")
@@ -165,25 +166,136 @@ func TestReloadCommandFailedReloadReturnsCompletedResult(t *testing.T) {
 		t.Fatalf("message = %q, want failure message", result.Message)
 	}
 
-	payload := reloadCommandPayload(t, result)
-	if payload.AttemptStatus != configkit.AttemptStatusFailed {
-		t.Fatalf("attempt status = %q, want failed", payload.AttemptStatus)
+	if result.Failure == nil || result.Failure.Code != configkit.FailureCodeDecodeFailed || result.Failure.Message != "config decode failed" {
+		t.Fatalf("failure = %+v, want safe decode failure", result.Failure)
 	}
-	if payload.ManagerState != configkit.LifecycleStateDegraded {
-		t.Fatalf("manager state = %q, want degraded", payload.ManagerState)
+	if result.Result != nil {
+		t.Fatalf("result = %+v, want nil", result.Result)
 	}
-	if payload.Published || payload.Changed {
-		t.Fatalf("published/changed = %v/%v, want false/false", payload.Published, payload.Changed)
+
+	status := manager.LifecycleStatus()
+	if status.State != configkit.LifecycleStateDegraded {
+		t.Fatalf("manager state = %q, want degraded", status.State)
 	}
-	if payload.CurrentRevision != "rev-1" {
-		t.Fatalf("current revision = %q, want last-known-good rev-1", payload.CurrentRevision)
+	if status.Current == nil || status.Current.Revision != "rev-1" {
+		t.Fatalf("current = %+v, want last-known-good rev-1", status.Current)
 	}
-	if payload.Failure == nil {
-		t.Fatal("failure = nil, want safe failure details")
+	if status.LastAttempt == nil || status.LastAttempt.Status != configkit.AttemptStatusFailed {
+		t.Fatalf("last attempt = %+v, want failed", status.LastAttempt)
+	}
+	if handlerStatus := command.Status(context.Background()); handlerStatus.State != opskit.StateReady || !handlerStatus.Ready {
+		t.Fatalf("handler status = %+v, want ready despite failed command", handlerStatus)
+	}
+	if readiness := manager.Readiness(context.Background()); !readiness.Ready {
+		t.Fatalf("manager readiness = %+v, want last-known-good ready", readiness)
 	}
 }
 
-func TestReloadCommandRunsThroughWorkerkitGenericAdapter(t *testing.T) {
+func TestReloadCommandLifecycleFailuresReturnFailedCommands(t *testing.T) {
+	tests := []struct {
+		name        string
+		source      func() configkit.Source
+		mutate      func(*configkit.Pipeline[reloadCommandTestConfig])
+		failureCode string
+	}{
+		{
+			name: "source read",
+			source: func() configkit.Source {
+				return reloadCommandSource{
+					metadata: configkit.SourceMetadata{Name: "memory", Kind: "memory"},
+					read: func(context.Context) (configkit.SourceData, error) {
+						return configkit.SourceData{}, errors.New("source unavailable")
+					},
+				}
+			},
+			failureCode: configkit.FailureCodeSourceReadFailed,
+		},
+		{
+			name: "decode",
+			source: func() configkit.Source {
+				return configkit.NewBytesSource([]byte(`{"name":`), configkit.SourceMetadata{}, "rev-2")
+			},
+			failureCode: configkit.FailureCodeDecodeFailed,
+		},
+		{
+			name:   "defaults",
+			source: validReloadCommandSource,
+			mutate: func(p *configkit.Pipeline[reloadCommandTestConfig]) {
+				p.ApplyDefaults = func(context.Context, reloadCommandTestConfig) (reloadCommandTestConfig, error) {
+					return reloadCommandTestConfig{}, errors.New("defaults failed")
+				}
+			},
+			failureCode: configkit.FailureCodeDefaultsFailed,
+		},
+		{
+			name:   "validation",
+			source: validReloadCommandSource,
+			mutate: func(p *configkit.Pipeline[reloadCommandTestConfig]) {
+				p.ValidateConfig = func(context.Context, reloadCommandTestConfig) error {
+					return errors.New("validation failed")
+				}
+			},
+			failureCode: configkit.FailureCodeValidateConfigFailed,
+		},
+		{
+			name:   "copy",
+			source: validReloadCommandSource,
+			mutate: func(p *configkit.Pipeline[reloadCommandTestConfig]) {
+				p.Copy = func(context.Context, reloadCommandTestConfig) (reloadCommandTestConfig, error) {
+					return reloadCommandTestConfig{}, errors.New("copy failed")
+				}
+			},
+			failureCode: configkit.FailureCodeCopyFailed,
+		},
+		{
+			name:   "redaction",
+			source: validReloadCommandSource,
+			mutate: func(p *configkit.Pipeline[reloadCommandTestConfig]) {
+				p.Redact = func(context.Context, reloadCommandTestConfig) (configkit.RedactedView, error) {
+					return nil, errors.New("redaction failed")
+				}
+			},
+			failureCode: configkit.FailureCodeRedactFailed,
+		},
+		{
+			name:   "checksum",
+			source: validReloadCommandSource,
+			mutate: func(p *configkit.Pipeline[reloadCommandTestConfig]) {
+				p.Checksum = func(context.Context, reloadCommandTestConfig) (string, error) {
+					return "", errors.New("checksum failed")
+				}
+			},
+			failureCode: configkit.FailureCodeChecksumFailed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := loadedReloadCommandManager(t)
+			pipeline := reloadCommandTestPipeline()
+			if tt.mutate != nil {
+				tt.mutate(&pipeline)
+			}
+			command := configkit.ReloadCommand(manager, tt.source(), pipeline)
+
+			result := command.HandleCommand(context.Background(), opskit.NewCommandRequest("config/reload", nil))
+			if result.State != opskit.StateFailed || !result.Accepted {
+				t.Fatalf("result = %+v, want accepted failed command", result)
+			}
+			if result.Failure == nil || result.Failure.Code != tt.failureCode {
+				t.Fatalf("failure = %+v, want code %q", result.Failure, tt.failureCode)
+			}
+			if result.Result != nil {
+				t.Fatalf("result payload = %+v, want nil", result.Result)
+			}
+			if status := manager.LifecycleStatus(); status.State != configkit.LifecycleStateDegraded || status.Current == nil || status.Current.Revision != "rev-1" {
+				t.Fatalf("manager status = %+v, want degraded with last-known-good rev-1", status)
+			}
+		})
+	}
+}
+
+func TestReloadCommandFailureRunsThroughWorkerkitGenericAdapter(t *testing.T) {
 	manager := loadedReloadCommandManager(t)
 	failingSource := configkit.NewBytesSource(
 		[]byte(`{"name":`),
@@ -201,16 +313,140 @@ func TestReloadCommandRunsThroughWorkerkitGenericAdapter(t *testing.T) {
 		t.Fatalf("worker command metadata = %+v, want Configkit descriptor metadata", spec)
 	}
 	result, err := spec.Handler.HandleCommand(context.Background(), workerkit.CommandRequest{Name: spec.Name})
+	if !errors.Is(err, workerkit.ErrOpsCommandFailed) {
+		t.Fatalf("generic Workerkit command error = %v, want ErrOpsCommandFailed", err)
+	}
+	var opsErr *workerkit.OpskitCommandError
+	if !errors.As(err, &opsErr) {
+		t.Fatalf("generic Workerkit command error = %T, want *OpskitCommandError", err)
+	}
+	if opsErr.Failure.Code != configkit.FailureCodeDecodeFailed || opsErr.Failure.Message != "config decode failed" {
+		t.Fatalf("generic Workerkit failure = %+v, want safe decode failure", opsErr.Failure)
+	}
+	if result.Message != "" || len(result.Payload) != 0 {
+		t.Fatalf("generic Workerkit result = %+v, want empty result on failure", result)
+	}
+}
+
+func TestReloadCommandWorkerkitFailureDoesNotFailRuntimeOrReadiness(t *testing.T) {
+	manager := loadedReloadCommandManager(t)
+	failingSource := configkit.NewBytesSource(
+		[]byte(`{"name":`),
+		configkit.SourceMetadata{Name: "memory", Kind: "memory"},
+		"rev-2",
+	)
+	observer := &reloadCommandWorkerObserver{}
+	runtime, err := workerkit.New(
+		workerkit.Identity{Name: "config-runtime"},
+		workerkit.WithObserver(observer),
+	)
 	if err != nil {
-		t.Fatalf("generic Workerkit command error = %v, want completed reload result", err)
+		t.Fatalf("create Workerkit runtime: %v", err)
+	}
+	reload := configkit.ReloadCommand(manager, failingSource, reloadCommandTestPipeline())
+	if err := runtime.Register(
+		workerkit.WorkerSpec{Name: "config", Worker: reloadCommandWorker{}},
+		workerkit.WithCommandSpec(workerkit.CommandFromOpskit(reload.Commands(context.Background())[0], reload)),
+	); err != nil {
+		t.Fatalf("register Workerkit command: %v", err)
+	}
+	if err := runtime.StartAll(context.Background()); err != nil {
+		t.Fatalf("start Workerkit runtime: %v", err)
+	}
+	t.Cleanup(func() { shutdownReloadCommandRuntime(t, runtime) })
+
+	_, err = runtime.Dispatch(context.Background(), workerkit.CommandRequest{Worker: "config", Name: "config/reload"})
+	if !errors.Is(err, workerkit.ErrOpsCommandFailed) {
+		t.Fatalf("dispatch error = %v, want ErrOpsCommandFailed", err)
 	}
 
+	worker, ok := runtime.Worker("config")
+	if !ok {
+		t.Fatal("Workerkit worker not found")
+	}
+	if worker.Status.State != workerkit.StateRunning || !worker.Status.Ready || !worker.Status.AcceptingWork {
+		t.Fatalf("worker status = %+v, want running, ready, and accepting work", worker.Status)
+	}
+	if worker.Status.LastFailure != nil {
+		t.Fatalf("worker lifecycle failure = %+v, want nil", worker.Status.LastFailure)
+	}
+	if worker.Status.LastCommandFailure == nil || worker.Status.LastCommandFailure.Code != configkit.FailureCodeDecodeFailed {
+		t.Fatalf("last command failure = %+v, want decode failure", worker.Status.LastCommandFailure)
+	}
+	if status := runtime.RuntimeStatus(); status.State != workerkit.StateRunning || !status.Ready {
+		t.Fatalf("runtime status = %+v, want running and ready", status)
+	}
+	if status := manager.LifecycleStatus(); status.State != configkit.LifecycleStateDegraded || status.Current == nil || status.Current.Revision != "rev-1" {
+		t.Fatalf("manager status = %+v, want degraded with last-known-good rev-1", status)
+	}
+	if len(observer.failures) != 1 || observer.failures[0].Code != configkit.FailureCodeDecodeFailed {
+		t.Fatalf("Workerkit failure events = %+v, want one decode failure", observer.failures)
+	}
+	if len(observer.ends) != 1 || observer.ends[0].Success || observer.ends[0].Code != configkit.FailureCodeDecodeFailed {
+		t.Fatalf("Workerkit command end events = %+v, want failed decode outcome", observer.ends)
+	}
+}
+
+func TestReloadCommandWorkerkitRetrySeesFailedReload(t *testing.T) {
+	manager := loadedReloadCommandManager(t)
+	reads := 0
+	source := reloadCommandSource{
+		metadata: configkit.SourceMetadata{Name: "retrying", Kind: "memory"},
+		read: func(ctx context.Context) (configkit.SourceData, error) {
+			reads++
+			if reads == 1 {
+				return configkit.SourceData{}, errors.New("temporary source failure")
+			}
+			return configkit.SourceData{
+				Data:     []byte(`{"name":"api","enabled":true,"port":9090}`),
+				Metadata: configkit.SourceMetadata{Name: "retrying", Kind: "memory"},
+				Revision: "rev-2",
+			}, nil
+		},
+	}
+	observer := &reloadCommandWorkerObserver{}
+	runtime, err := workerkit.New(
+		workerkit.Identity{Name: "config-runtime"},
+		workerkit.WithObserver(observer),
+	)
+	if err != nil {
+		t.Fatalf("create Workerkit runtime: %v", err)
+	}
+	reload := configkit.ReloadCommand(manager, source, reloadCommandTestPipeline())
+	if err := runtime.Register(
+		workerkit.WorkerSpec{Name: "config", Worker: reloadCommandWorker{}},
+		workerkit.WithWorkerCommandRetry(retrykit.AttemptsIf(2, nil, nil, func(err error) bool {
+			var opsErr *workerkit.OpskitCommandError
+			return errors.As(err, &opsErr) && opsErr.Failure.Code == configkit.FailureCodeSourceReadFailed
+		})),
+		workerkit.WithCommandSpec(workerkit.CommandFromOpskit(reload.Commands(context.Background())[0], reload)),
+	); err != nil {
+		t.Fatalf("register Workerkit command: %v", err)
+	}
+	if err := runtime.StartAll(context.Background()); err != nil {
+		t.Fatalf("start Workerkit runtime: %v", err)
+	}
+	t.Cleanup(func() { shutdownReloadCommandRuntime(t, runtime) })
+
+	result, err := runtime.Dispatch(context.Background(), workerkit.CommandRequest{Worker: "config", Name: "config/reload"})
+	if err != nil {
+		t.Fatalf("dispatch retried reload: %v", err)
+	}
+	if reads != 2 {
+		t.Fatalf("source reads = %d, want 2", reads)
+	}
 	var payload configkit.ReloadCommandResult
 	if err := json.Unmarshal(result.Payload, &payload); err != nil {
-		t.Fatalf("decode generic Workerkit payload: %v", err)
+		t.Fatalf("decode successful retry payload: %v", err)
 	}
-	if payload.AttemptStatus != configkit.AttemptStatusFailed || payload.ManagerState != configkit.LifecycleStateDegraded {
-		t.Fatalf("payload = %+v, want failed reload with degraded last-known-good state", payload)
+	if payload.AttemptStatus != configkit.AttemptStatusSucceeded || payload.ManagerState != configkit.LifecycleStateLoaded || payload.CurrentRevision != "rev-2" {
+		t.Fatalf("successful retry payload = %+v, want loaded rev-2", payload)
+	}
+	if len(observer.failures) != 1 || observer.failures[0].Code != configkit.FailureCodeSourceReadFailed || observer.failures[0].Attempt != 1 {
+		t.Fatalf("Workerkit retry failure events = %+v, want first-attempt source failure", observer.failures)
+	}
+	if len(observer.ends) != 1 || !observer.ends[0].Success || observer.ends[0].Attempts != 2 {
+		t.Fatalf("Workerkit retry command end events = %+v, want successful two-attempt outcome", observer.ends)
 	}
 }
 
@@ -278,27 +514,72 @@ func TestReloadCommandMissingManagerRejected(t *testing.T) {
 	}
 }
 
-func TestReloadCommandMissingSourceReturnsFailurePayload(t *testing.T) {
-	manager := configkit.NewManager[reloadCommandTestConfig]()
+func TestReloadCommandMissingSourceIsNotReadyAndRejected(t *testing.T) {
+	manager := loadedReloadCommandManager(t)
 	command := configkit.ReloadCommand(manager, nil, reloadCommandTestPipeline())
 
+	if status := command.Status(context.Background()); status.State != opskit.StateNotReady || status.Ready {
+		t.Fatalf("status = %+v, want not ready", status)
+	}
 	result := command.HandleCommand(context.Background(), opskit.NewCommandRequest("config/reload", nil))
-	if result.State != opskit.StateReady {
-		t.Fatalf("state = %s, want completed command", result.State)
+	if result.State != opskit.StateNotReady || result.Accepted {
+		t.Fatalf("result = %+v, want rejected command", result)
 	}
-	payload := reloadCommandPayload(t, result)
-	if payload.AttemptStatus != configkit.AttemptStatusFailed {
-		t.Fatalf("attempt status = %q, want failed", payload.AttemptStatus)
+	if result.Failure == nil || result.Failure.Code != configkit.FailureCodeMissingSource {
+		t.Fatalf("failure = %+v, want missing source", result.Failure)
 	}
-	if payload.ManagerState != configkit.LifecycleStateFailed {
-		t.Fatalf("manager state = %q, want failed", payload.ManagerState)
+	if result.Result != nil {
+		t.Fatalf("result payload = %+v, want nil", result.Result)
 	}
-	if payload.Failure == nil || payload.Failure.Code != "missing_source" {
-		t.Fatalf("payload failure = %+v, want missing source", payload.Failure)
+	if status := manager.LifecycleStatus(); status.State != configkit.LifecycleStateLoaded || status.Current == nil || status.Current.Revision != "rev-1" {
+		t.Fatalf("manager status = %+v, want unchanged loaded rev-1", status)
+	}
+	if attempts := manager.Attempts(); len(attempts) != 1 {
+		t.Fatalf("manager attempts = %d, want only initial load", len(attempts))
 	}
 }
 
-func TestReloadCommandPanicPayloadIsSanitized(t *testing.T) {
+func TestReloadCommandInvalidPipelineIsNotReadyAndRejected(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*configkit.Pipeline[reloadCommandTestConfig])
+	}{
+		{name: "missing decoder", mutate: func(p *configkit.Pipeline[reloadCommandTestConfig]) { p.Decode = nil }},
+		{name: "missing redactor", mutate: func(p *configkit.Pipeline[reloadCommandTestConfig]) { p.Redact = nil }},
+		{name: "missing checksum", mutate: func(p *configkit.Pipeline[reloadCommandTestConfig]) { p.Checksum = nil }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := loadedReloadCommandManager(t)
+			pipeline := reloadCommandTestPipeline()
+			tt.mutate(&pipeline)
+			command := configkit.ReloadCommand(
+				manager,
+				configkit.NewBytesSource([]byte(`{}`), configkit.SourceMetadata{}, "rev-2"),
+				pipeline,
+			)
+
+			if status := command.Status(context.Background()); status.State != opskit.StateNotReady || status.Ready {
+				t.Fatalf("status = %+v, want not ready", status)
+			}
+			result := command.HandleCommand(context.Background(), opskit.NewCommandRequest("config/reload", nil))
+			if result.State != opskit.StateNotReady || result.Accepted {
+				t.Fatalf("result = %+v, want rejected command", result)
+			}
+			if result.Failure == nil || result.Failure.Code != configkit.FailureCodePipelineValidateFailed {
+				t.Fatalf("failure = %+v, want pipeline validation failure", result.Failure)
+			}
+			if status := manager.LifecycleStatus(); status.State != configkit.LifecycleStateLoaded || status.Current == nil || status.Current.Revision != "rev-1" {
+				t.Fatalf("manager status = %+v, want unchanged loaded rev-1", status)
+			}
+			if attempts := manager.Attempts(); len(attempts) != 1 {
+				t.Fatalf("manager attempts = %d, want only initial load", len(attempts))
+			}
+		})
+	}
+}
+
+func TestReloadCommandPanicFailureIsSanitized(t *testing.T) {
 	const secret = "postgres://user:pass@example/db"
 	manager := configkit.NewManager[reloadCommandTestConfig]()
 	source := configkit.NewBytesSource(
@@ -320,9 +601,8 @@ func TestReloadCommandPanicPayloadIsSanitized(t *testing.T) {
 	if strings.Contains(string(encoded), secret) {
 		t.Fatalf("command result = %s, must not contain %q", encoded, secret)
 	}
-	payload := reloadCommandPayload(t, result)
-	if payload.Failure == nil || payload.Failure.Message != "config validation failed" {
-		t.Fatalf("payload failure = %+v, want safe validation failure", payload.Failure)
+	if result.Failure == nil || result.Failure.Message != "config validation failed" {
+		t.Fatalf("failure = %+v, want safe validation failure", result.Failure)
 	}
 }
 
@@ -348,9 +628,8 @@ func TestReloadCommandReturnedErrorIsPrivate(t *testing.T) {
 	if strings.Contains(string(encoded), secret) || strings.Contains(string(encoded), `"error"`) {
 		t.Fatalf("command result exposed private or legacy error data: %s", encoded)
 	}
-	payload := reloadCommandPayload(t, result)
-	if payload.Failure == nil || payload.Failure.Code != configkit.FailureCodeValidateConfigFailed || payload.Failure.Message != "config validation failed" {
-		t.Fatalf("payload failure = %+v, want safe validation failure", payload.Failure)
+	if result.Failure == nil || result.Failure.Code != configkit.FailureCodeValidateConfigFailed || result.Failure.Message != "config validation failed" {
+		t.Fatalf("failure = %+v, want safe validation failure", result.Failure)
 	}
 }
 
@@ -434,6 +713,14 @@ func reloadCommandTestPipeline() configkit.Pipeline[reloadCommandTestConfig] {
 	}
 }
 
+func validReloadCommandSource() configkit.Source {
+	return configkit.NewBytesSource(
+		[]byte(`{"name":"api","enabled":true,"port":9090}`),
+		configkit.SourceMetadata{Name: "memory", Kind: "memory"},
+		"rev-2",
+	)
+}
+
 func reloadCommandPayload(t *testing.T, result opskit.CommandResult) configkit.ReloadCommandResult {
 	t.Helper()
 
@@ -442,4 +729,52 @@ func reloadCommandPayload(t *testing.T, result opskit.CommandResult) configkit.R
 		t.Fatalf("result payload type = %T, want configkit.ReloadCommandResult", result.Result)
 	}
 	return payload
+}
+
+type reloadCommandSource struct {
+	metadata configkit.SourceMetadata
+	read     func(context.Context) (configkit.SourceData, error)
+}
+
+func (s reloadCommandSource) Metadata() configkit.SourceMetadata {
+	return s.metadata
+}
+
+func (s reloadCommandSource) Read(ctx context.Context) (configkit.SourceData, error) {
+	return s.read(ctx)
+}
+
+type reloadCommandWorker struct{}
+
+func (reloadCommandWorker) Start(context.Context) error {
+	return nil
+}
+
+func (reloadCommandWorker) Stop(context.Context) error {
+	return nil
+}
+
+type reloadCommandWorkerObserver struct {
+	workerkit.NopObserver
+	failures []workerkit.FailureEvent
+	ends     []workerkit.CommandEndEvent
+}
+
+func (o *reloadCommandWorkerObserver) StartCommand(ctx context.Context, _ workerkit.CommandStartEvent) (context.Context, workerkit.CommandObservation) {
+	return ctx, workerkit.CommandObservationFunc(func(_ context.Context, event workerkit.CommandEndEvent) {
+		o.ends = append(o.ends, event)
+	})
+}
+
+func (o *reloadCommandWorkerObserver) ObserveFailure(_ context.Context, event workerkit.FailureEvent) {
+	o.failures = append(o.failures, event)
+}
+
+func shutdownReloadCommandRuntime(t *testing.T, runtime *workerkit.Runtime) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := runtime.Shutdown(ctx); err != nil {
+		t.Errorf("shutdown Workerkit runtime: %v", err)
+	}
 }

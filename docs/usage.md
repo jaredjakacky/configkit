@@ -85,6 +85,23 @@ Optional steps:
 invalid configuration. `Copy` should detach mutable references before
 publication when `T` contains maps, slices, pointers, or other shared state.
 
+### JSON decoding
+
+`JSONDecoder[T]` is the production-oriented default. It rejects unknown object
+fields when decoding into ordinary Go structs and requires exactly one JSON
+value. Leading and trailing whitespace are accepted; a second JSON value or
+other trailing data is rejected.
+
+This is schema strictness, not a custom JSON language. Field matching remains
+case-insensitive, duplicate keys retain `encoding/json` behavior, map keys are
+unrestricted, and custom `UnmarshalJSON` methods control their own decoding.
+Missing fields still require application defaults or validation.
+
+Use `LenientJSONDecoder[T]` when unknown fields must be ignored deliberately,
+such as a shared configuration document containing fields for multiple binary
+versions. The lenient decoder otherwise preserves `json.Unmarshal` syntax and
+single-value behavior.
+
 ## Reading Current Config
 
 Use `Value` when application code needs the typed value:

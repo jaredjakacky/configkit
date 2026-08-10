@@ -6,7 +6,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	configkit "github.com/jaredjakacky/configkit"
 )
@@ -358,6 +360,315 @@ func TestManagerConcurrentReadsDuringApply(t *testing.T) {
 	}
 }
 
+func TestZeroValueManagerCanceledBeforeAdmissionHasNoEffects(t *testing.T) {
+	var manager configkit.Manager[stepsTestConfig]
+	source := &admissionTrackingSource{
+		data: configkit.SourceData{
+			Data:     []byte(`{"name":"api","enabled":true,"port":8080}`),
+			Revision: "canceled",
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	loadResult, err := manager.Load(ctx, configkit.AttemptKindReload, source.data, testPipeline())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("load error = %v, want context.Canceled", err)
+	}
+	if loadResult.Load.Attempt.ID != 0 || loadResult.Load.Attempt.Status != "" || loadResult.Load.Snapshot != nil {
+		t.Fatalf("load result = %+v, want zero result", loadResult)
+	}
+
+	sourceResult, err := manager.LoadFromSource(ctx, configkit.AttemptKindReload, source, testPipeline())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("load from source error = %v, want context.Canceled", err)
+	}
+	if sourceResult.Load.Attempt.ID != 0 || sourceResult.Load.Attempt.Status != "" || sourceResult.Load.Snapshot != nil {
+		t.Fatalf("load from source result = %+v, want zero result", sourceResult)
+	}
+	if source.metadataCalls.Load() != 0 || source.readCalls.Load() != 0 {
+		t.Fatalf("source calls = metadata %d, read %d; want zero", source.metadataCalls.Load(), source.readCalls.Load())
+	}
+
+	applyResult, err := manager.Apply(ctx, succeededStatusTestResult("canceled", "sum-canceled"))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("apply error = %v, want context.Canceled", err)
+	}
+	if applyResult != (configkit.ApplyResult{}) {
+		t.Fatalf("apply result = %+v, want zero result", applyResult)
+	}
+	assertUnchangedManager(t, &manager)
+
+	succeeded, err := manager.Load(context.Background(), configkit.AttemptKindInitialLoad, configkit.SourceData{
+		Data:     []byte(`{"name":"api","enabled":true,"port":8080}`),
+		Revision: "v1",
+	}, testPipeline())
+	if err != nil {
+		t.Fatalf("load after canceled calls: %v", err)
+	}
+	if succeeded.Load.Attempt.ID != 1 {
+		t.Fatalf("first admitted attempt id = %d, want 1", succeeded.Load.Attempt.ID)
+	}
+}
+
+func TestManagerCancellationImmediatelyAfterAcquisitionHasNoEffects(t *testing.T) {
+	manager := configkit.NewManager[stepsTestConfig]()
+	baseCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx := &cancelOnSecondErrContext{
+		Context: baseCtx,
+		cancel:  cancel,
+	}
+
+	result, err := manager.Load(ctx, configkit.AttemptKindReload, configkit.SourceData{
+		Data:     []byte(`{"name":"api","enabled":true,"port":8080}`),
+		Revision: "canceled",
+	}, testPipeline())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("load error = %v, want context.Canceled", err)
+	}
+	if result.Load.Attempt.ID != 0 || result.Load.Attempt.Status != "" || result.Load.Snapshot != nil {
+		t.Fatalf("load result = %+v, want zero result", result)
+	}
+	assertUnchangedManager(t, manager)
+
+	succeeded, err := manager.Load(context.Background(), configkit.AttemptKindInitialLoad, configkit.SourceData{
+		Data:     []byte(`{"name":"api","enabled":true,"port":8080}`),
+		Revision: "v1",
+	}, testPipeline())
+	if err != nil {
+		t.Fatalf("load after acquisition cancellation: %v", err)
+	}
+	if succeeded.Load.Attempt.ID != 1 {
+		t.Fatalf("first admitted attempt id = %d, want 1", succeeded.Load.Attempt.ID)
+	}
+}
+
+func TestManagerLifecycleWaiterReturnsOnCancellationWithoutEffects(t *testing.T) {
+	manager, events, firstDone, releaseFirst := startBlockedManagerLoad(t)
+	source := &admissionTrackingSource{
+		data: configkit.SourceData{
+			Data:     []byte(`{"name":"api","enabled":true,"port":8080}`),
+			Revision: "canceled",
+		},
+	}
+	baseCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx := newDoneObservedContext(baseCtx)
+	type outcome struct {
+		result configkit.ManagedLoadResult[stepsTestConfig]
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		result, err := manager.LoadFromSource(ctx, configkit.AttemptKindReload, source, testPipeline())
+		done <- outcome{result: result, err: err}
+	}()
+
+	receiveManagerTestValue(t, ctx.doneObserved)
+	cancel()
+	got := receiveManagerTestValue(t, done)
+	if !errors.Is(got.err, context.Canceled) {
+		t.Fatalf("waiting load error = %v, want context.Canceled", got.err)
+	}
+	if got.result.Load.Attempt.ID != 0 || got.result.Load.Attempt.Status != "" || got.result.Load.Snapshot != nil {
+		t.Fatalf("waiting load result = %+v, want zero result", got.result)
+	}
+	if source.metadataCalls.Load() != 0 || source.readCalls.Load() != 0 {
+		t.Fatalf("source calls = metadata %d, read %d; want zero", source.metadataCalls.Load(), source.readCalls.Load())
+	}
+	assertUnchangedManager(t, manager)
+
+	releaseFirst()
+	if err := receiveManagerTestValue(t, firstDone); err != nil {
+		t.Fatalf("first load: %v", err)
+	}
+	if got := len(events); got != 3 {
+		t.Fatalf("event count = %d, want only the first load's 3 events", got)
+	}
+	for i := 0; i < 3; i++ {
+		event := <-events
+		if event.AttemptID != 1 {
+			t.Fatalf("event attempt id = %d, want 1", event.AttemptID)
+		}
+	}
+
+	if _, err := manager.Apply(context.Background(), succeededStatusTestResult("v2", "sum-2")); err != nil {
+		t.Fatalf("apply after canceled waiter: %v", err)
+	}
+	attempts := manager.Attempts()
+	if len(attempts) != 2 || attempts[0].ID != 1 || attempts[1].ID != 2 {
+		t.Fatalf("attempts = %+v, want admitted attempt ids 1 and 2", attempts)
+	}
+}
+
+func TestManagerLifecycleWaiterReturnsOnDeadline(t *testing.T) {
+	manager, _, firstDone, releaseFirst := startBlockedManagerLoad(t)
+	baseCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	ctx := newDoneObservedContext(baseCtx)
+	type outcome struct {
+		result configkit.ManagedLoadResult[stepsTestConfig]
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		result, err := manager.Load(ctx, configkit.AttemptKindReload, configkit.SourceData{
+			Data:     []byte(`{"name":"api","enabled":true,"port":8080}`),
+			Revision: "timed-out",
+		}, testPipeline())
+		done <- outcome{result: result, err: err}
+	}()
+
+	receiveManagerTestValue(t, ctx.doneObserved)
+	got := receiveManagerTestValue(t, done)
+	if !errors.Is(got.err, context.DeadlineExceeded) {
+		t.Fatalf("waiting load error = %v, want context.DeadlineExceeded", got.err)
+	}
+	if got.result.Load.Attempt.ID != 0 || got.result.Load.Attempt.Status != "" || got.result.Load.Snapshot != nil {
+		t.Fatalf("waiting load result = %+v, want zero result", got.result)
+	}
+	assertUnchangedManager(t, manager)
+
+	releaseFirst()
+	if err := receiveManagerTestValue(t, firstDone); err != nil {
+		t.Fatalf("first load: %v", err)
+	}
+}
+
+func TestManagerApplyCanceledWhileWaitingDoesNotPublish(t *testing.T) {
+	manager, _, firstDone, releaseFirst := startBlockedManagerLoad(t)
+	baseCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx := newDoneObservedContext(baseCtx)
+	type outcome struct {
+		result configkit.ApplyResult
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		result, err := manager.Apply(ctx, succeededStatusTestResult("canceled", "sum-canceled"))
+		done <- outcome{result: result, err: err}
+	}()
+
+	receiveManagerTestValue(t, ctx.doneObserved)
+	cancel()
+	got := receiveManagerTestValue(t, done)
+	if !errors.Is(got.err, context.Canceled) {
+		t.Fatalf("waiting apply error = %v, want context.Canceled", got.err)
+	}
+	if got.result != (configkit.ApplyResult{}) {
+		t.Fatalf("waiting apply result = %+v, want zero result", got.result)
+	}
+	assertUnchangedManager(t, manager)
+
+	releaseFirst()
+	if err := receiveManagerTestValue(t, firstDone); err != nil {
+		t.Fatalf("first load: %v", err)
+	}
+	snapshot, ok := manager.Snapshot()
+	if !ok || snapshot.Metadata().Revision != "v1" {
+		t.Fatalf("current snapshot = %+v, ok = %t; want first load revision v1", snapshot.Metadata(), ok)
+	}
+	if status := manager.LifecycleStatus(); status.LastAttempt == nil || status.LastAttempt.ID != 1 {
+		t.Fatalf("last attempt = %+v, want first admitted attempt id 1", status.LastAttempt)
+	}
+}
+
+func TestManagerCancellationAfterAdmissionRecordsFailedAttempt(t *testing.T) {
+	enteredDecode := make(chan struct{})
+	pipeline := testPipeline()
+	pipeline.Decode = func(ctx context.Context, data configkit.SourceData) (stepsTestConfig, error) {
+		close(enteredDecode)
+		<-ctx.Done()
+		return stepsTestConfig{}, ctx.Err()
+	}
+	manager := configkit.NewManager[stepsTestConfig]()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	type outcome struct {
+		result configkit.ManagedLoadResult[stepsTestConfig]
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		result, err := manager.Load(ctx, configkit.AttemptKindInitialLoad, configkit.SourceData{
+			Data: []byte(`{"name":"api","enabled":true,"port":8080}`),
+		}, pipeline)
+		done <- outcome{result: result, err: err}
+	}()
+
+	receiveManagerTestValue(t, enteredDecode)
+	cancel()
+	got := receiveManagerTestValue(t, done)
+	if !errors.Is(got.err, context.Canceled) {
+		t.Fatalf("admitted load error = %v, want context.Canceled", got.err)
+	}
+	if got.result.Load.Attempt.ID != 1 {
+		t.Fatalf("attempt id = %d, want 1", got.result.Load.Attempt.ID)
+	}
+	if got.result.Load.Attempt.Status != configkit.AttemptStatusFailed || got.result.Load.Attempt.Stage != configkit.AttemptStageDecode {
+		t.Fatalf("attempt = %+v, want failed decode attempt", got.result.Load.Attempt)
+	}
+	status := manager.LifecycleStatus()
+	if status.State != configkit.LifecycleStateFailed || status.LastFailure == nil || status.LastFailure.ID != 1 {
+		t.Fatalf("status = %+v, want recorded failed attempt 1", status)
+	}
+	if attempts := manager.Attempts(); len(attempts) != 1 || attempts[0].ID != 1 {
+		t.Fatalf("attempts = %+v, want recorded attempt 1", attempts)
+	}
+}
+
+func TestManagerApplyCancellationAfterAdmissionDoesNotRollbackPublication(t *testing.T) {
+	notifying := make(chan struct{})
+	observerCanceled := make(chan struct{})
+	releaseObserver := make(chan struct{})
+	observer := configkit.Observer(func(ctx context.Context, event configkit.Event) {
+		if event.Kind != configkit.EventKindSnapshotApplied {
+			return
+		}
+		close(notifying)
+		<-ctx.Done()
+		close(observerCanceled)
+		<-releaseObserver
+	})
+	manager := configkit.NewManager[stepsTestConfig](configkit.WithObservers(observer))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() {
+			close(releaseObserver)
+		})
+	}
+	t.Cleanup(release)
+	type outcome struct {
+		result configkit.ApplyResult
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		result, err := manager.Apply(ctx, succeededStatusTestResult("v1", "sum-1"))
+		done <- outcome{result: result, err: err}
+	}()
+
+	receiveManagerTestValue(t, notifying)
+	cancel()
+	receiveManagerTestValue(t, observerCanceled)
+	snapshot, ok := manager.Snapshot()
+	if !ok || snapshot.Metadata().Revision != "v1" {
+		t.Fatalf("current snapshot = %+v, ok = %t; want published revision v1", snapshot.Metadata(), ok)
+	}
+	release()
+	got := receiveManagerTestValue(t, done)
+	if got.err != nil {
+		t.Fatalf("admitted apply error = %v, want nil", got.err)
+	}
+	if !got.result.Published {
+		t.Fatalf("apply result = %+v, want published", got.result)
+	}
+}
+
 func TestManagerLoadAppliesSuccessfulResult(t *testing.T) {
 	manager := configkit.NewManager[stepsTestConfig]()
 
@@ -581,6 +892,120 @@ func (s *countingMetadataSource) Metadata() configkit.SourceMetadata {
 
 func (s *countingMetadataSource) Read(ctx context.Context) (configkit.SourceData, error) {
 	return s.data, nil
+}
+
+type admissionTrackingSource struct {
+	metadataCalls atomic.Int64
+	readCalls     atomic.Int64
+	data          configkit.SourceData
+}
+
+func (s *admissionTrackingSource) Metadata() configkit.SourceMetadata {
+	s.metadataCalls.Add(1)
+	return configkit.SourceMetadata{Name: "tracked", Kind: "memory"}
+}
+
+func (s *admissionTrackingSource) Read(context.Context) (configkit.SourceData, error) {
+	s.readCalls.Add(1)
+	return s.data, nil
+}
+
+type doneObservedContext struct {
+	context.Context
+	doneObserved chan struct{}
+	once         sync.Once
+}
+
+type cancelOnSecondErrContext struct {
+	context.Context
+	cancel context.CancelFunc
+	calls  atomic.Int64
+}
+
+func (c *cancelOnSecondErrContext) Err() error {
+	if c.calls.Add(1) == 2 {
+		c.cancel()
+	}
+	return c.Context.Err()
+}
+
+func newDoneObservedContext(ctx context.Context) *doneObservedContext {
+	return &doneObservedContext{
+		Context:      ctx,
+		doneObserved: make(chan struct{}),
+	}
+}
+
+func (c *doneObservedContext) Done() <-chan struct{} {
+	c.once.Do(func() {
+		close(c.doneObserved)
+	})
+	return c.Context.Done()
+}
+
+func startBlockedManagerLoad(t *testing.T) (*configkit.Manager[stepsTestConfig], chan configkit.Event, <-chan error, func()) {
+	t.Helper()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	events := make(chan configkit.Event, 8)
+	var blockOnce sync.Once
+	observer := configkit.Observer(func(_ context.Context, event configkit.Event) {
+		events <- event
+		if event.Kind == configkit.EventKindLoadStarted {
+			blockOnce.Do(func() {
+				close(started)
+				<-release
+			})
+		}
+	})
+	manager := configkit.NewManager[stepsTestConfig](configkit.WithObservers(observer))
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := manager.Load(context.Background(), configkit.AttemptKindInitialLoad, configkit.SourceData{
+			Data:     []byte(`{"name":"api","enabled":true,"port":8080}`),
+			Revision: "v1",
+		}, testPipeline())
+		firstDone <- err
+	}()
+
+	var releaseOnce sync.Once
+	releaseFirst := func() {
+		releaseOnce.Do(func() {
+			close(release)
+		})
+	}
+	t.Cleanup(releaseFirst)
+	receiveManagerTestValue(t, started)
+	return manager, events, firstDone, releaseFirst
+}
+
+func assertUnchangedManager(t *testing.T, manager *configkit.Manager[stepsTestConfig]) {
+	t.Helper()
+
+	status := manager.LifecycleStatus()
+	if status.State != configkit.LifecycleStateUnloaded || status.LastAttempt != nil || status.LastFailure != nil || status.LastApply != nil {
+		t.Fatalf("manager status = %+v, want unchanged unloaded status", status)
+	}
+	if attempts := manager.Attempts(); len(attempts) != 0 {
+		t.Fatalf("attempts = %+v, want none", attempts)
+	}
+	if snapshot, ok := manager.Snapshot(); ok {
+		t.Fatalf("snapshot = %+v, ok = true; want none", snapshot)
+	}
+}
+
+func receiveManagerTestValue[T any](t *testing.T, ch <-chan T) T {
+	t.Helper()
+
+	select {
+	case value := <-ch:
+		return value
+	case <-time.After(time.Second):
+		var zero T
+		t.Fatal("timed out waiting for manager test operation")
+		return zero
+	}
 }
 
 func assertStringOmits(t *testing.T, label string, value string, secret string) {

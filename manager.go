@@ -17,8 +17,8 @@ const defaultAttemptHistoryLimit = 20
 // current configuration state. Manager-owned load attempts are serialized while
 // status and snapshot reads remain concurrent.
 type Manager[T any] struct {
-	attemptMu sync.Mutex
-	mu        sync.RWMutex
+	attemptAdmission lifecycleAdmission
+	mu               sync.RWMutex
 
 	nextAttemptID uint64
 
@@ -35,6 +35,44 @@ type Manager[T any] struct {
 	componentInfo    opskit.ComponentInfo
 	degradedReady    bool
 	degradedReadySet bool
+}
+
+// lifecycleAdmission serializes Manager-owned lifecycle mutations while
+// allowing callers to stop waiting when their context is canceled. Its zero
+// value is ready for use so Manager's zero value remains valid.
+type lifecycleAdmission struct {
+	once sync.Once
+	held chan struct{}
+}
+
+func (a *lifecycleAdmission) acquire(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	a.once.Do(func() {
+		a.held = make(chan struct{}, 1)
+	})
+
+	select {
+	case a.held <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	// Prefer cancellation when admission and cancellation become ready at the
+	// same time. Once this check succeeds, the lifecycle attempt is admitted
+	// and later cancellation follows the existing cooperative context contract.
+	if err := ctx.Err(); err != nil {
+		<-a.held
+		return err
+	}
+
+	return nil
+}
+
+func (a *lifecycleAdmission) release() {
+	<-a.held
 }
 
 // ManagerOption configures a Manager.
@@ -251,14 +289,21 @@ func (m *Manager[T]) Value() (T, bool) {
 // any ID on the input result. Apply is serialized with manager-owned load
 // attempts.
 //
+// If ctx is canceled before Apply gains lifecycle admission, Apply returns the
+// context error without validating or recording the result, assigning an
+// attempt ID, notifying observers, or publishing a snapshot. Once admitted,
+// Apply is not rolled back by later cancellation.
+//
 // Apply emits snapshot_applied when a successful snapshot is published. It does
 // not emit load_started, load_succeeded, or load_failed because the load
 // lifecycle occurred outside the manager-owned load methods.
 //
 // Callers must pass a non-nil context. Passing nil is invalid and may panic.
 func (m *Manager[T]) Apply(ctx context.Context, result LoadResult[T]) (ApplyResult, error) {
-	m.attemptMu.Lock()
-	defer m.attemptMu.Unlock()
+	if err := m.attemptAdmission.acquire(ctx); err != nil {
+		return ApplyResult{}, err
+	}
+	defer m.attemptAdmission.release()
 
 	return m.applyValidated(ctx, result, true)
 }
@@ -343,10 +388,16 @@ func (m *Manager[T]) apply(ctx context.Context, result LoadResult[T]) ApplyResul
 // ManagedLoadResult includes both the stateless load result and the manager
 // apply result.
 //
+// If ctx is canceled before Load gains lifecycle admission, Load returns the
+// context error without starting or recording an attempt. Once admitted,
+// cancellation is cooperative through the load lifecycle and observers.
+//
 // Callers must pass a non-nil context. Passing nil is invalid and may panic.
 func (m *Manager[T]) Load(ctx context.Context, kind AttemptKind, data SourceData, pipeline Pipeline[T]) (ManagedLoadResult[T], error) {
-	m.attemptMu.Lock()
-	defer m.attemptMu.Unlock()
+	if err := m.attemptAdmission.acquire(ctx); err != nil {
+		return ManagedLoadResult[T]{}, err
+	}
+	defer m.attemptAdmission.release()
 
 	attemptID := m.nextManagedAttemptID()
 	m.notifyLoadStarted(ctx, attemptID, kind, data.Metadata, data.Revision)
@@ -373,10 +424,17 @@ func (m *Manager[T]) Load(ctx context.Context, kind AttemptKind, data SourceData
 // ManagedLoadResult includes both the stateless load result and the manager
 // apply result.
 //
+// If ctx is canceled before LoadFromSource gains lifecycle admission,
+// LoadFromSource returns the context error without reading source metadata,
+// reading the source, or starting or recording an attempt. Once admitted,
+// cancellation is cooperative through the load lifecycle and observers.
+//
 // Callers must pass a non-nil context. Passing nil is invalid and may panic.
 func (m *Manager[T]) LoadFromSource(ctx context.Context, kind AttemptKind, source Source, pipeline Pipeline[T]) (ManagedLoadResult[T], error) {
-	m.attemptMu.Lock()
-	defer m.attemptMu.Unlock()
+	if err := m.attemptAdmission.acquire(ctx); err != nil {
+		return ManagedLoadResult[T]{}, err
+	}
+	defer m.attemptAdmission.release()
 
 	startedAt := time.Now().UTC()
 	var sourceMetadata SourceMetadata

@@ -91,12 +91,15 @@ configuration into a framework.
 
   Reads from a source, runs the load lifecycle, applies the result, records the
   attempt, preserves the last-known-good snapshot on failure, and emits observer
-  events.
+  events. Manager lifecycle mutation is serialized. Cancellation before
+  admission returns the context error without reading the source or starting or
+  recording an attempt.
 
 - `Manager.Load(ctx, kind, data, pipeline)`
 
   Runs the load lifecycle against already-read source data and applies the
-  result to the manager.
+  result to the manager. Cancellation before serialized lifecycle admission
+  returns the context error without starting or recording an attempt.
 
 ### Stateless load path
 
@@ -224,7 +227,17 @@ configuration into a framework.
 
 - `JSONDecoder[T]()`
 
-  Standard-library JSON decoder for `SourceData.Data`.
+  Production-oriented standard-library JSON decoder for `SourceData.Data`.
+  Rejects unknown fields at ordinary Go struct boundaries and requires exactly
+  one JSON value. Leading and trailing whitespace are accepted. Field matching,
+  duplicate keys, maps, and custom unmarshalers otherwise retain
+  `encoding/json` behavior.
+
+- `LenientJSONDecoder[T]()`
+
+  Preserves `json.Unmarshal` behavior, including ignoring unknown struct fields.
+  It still requires exactly one JSON value and rejects non-whitespace trailing
+  data.
 
 - `DefaultApplier[T]`
 
@@ -380,7 +393,11 @@ configuration into a framework.
   snapshot. Failed results preserve the current snapshot. Invalid results return
   an error wrapping `ErrInvalidLoadResult` and do not mutate manager state.
   Apply emits `snapshot_applied` when it publishes a snapshot, but it does not
-  emit load lifecycle events because it did not perform the load.
+  emit load lifecycle events because it did not perform the load. Cancellation
+  before serialized lifecycle admission returns the context error without
+  validating or recording the result, assigning an attempt ID, notifying
+  observers, or publishing. Once admitted, later cancellation does not roll
+  back the apply.
 
 - `ManagerOption`
 
@@ -763,6 +780,14 @@ Passing nil to lifecycle APIs is invalid and may panic. `AsyncObserver.Notify`
 and `AsyncObserver.Close` are defensive and normalize nil contexts to
 `context.Background()`.
 
+Manager-owned `Load`, `LoadFromSource`, and `Apply` calls wait for serialized
+lifecycle admission using their contexts. Cancellation before admission returns
+the context error with a zero result and does not consume an attempt ID, emit
+events, enter history, change lifecycle status, read a source, or publish a
+snapshot. After admission, cancellation is cooperative through sources,
+pipeline steps, and observers. It does not retroactively erase an attempt or
+roll back publication.
+
 Operational output does not include raw typed configuration values, but it can
 include source metadata, revisions, checksums, redacted values, and error
 strings. Treat status, inspection, observers, logs, telemetry, and adapter
@@ -815,14 +840,15 @@ root module. See the README's
 
 - `ErrMissingInspector`
 
-  Returned when `Mount` is called without a Configkit inspector.
+  Returned when `Mount` is called with a nil or typed-nil Configkit inspector.
 
 ### Readiness
 
 - `ReadinessCheck(provider)`
 
   Adapts Configkit core readiness into a Servekit readiness check for services
-  that are not using an Opskit registry.
+  that are not using an Opskit registry. Nil and typed-nil providers produce a
+  missing-provider error when the check runs.
 
   Default policy:
 
@@ -854,13 +880,19 @@ root module. See the README's
 
   The command calls
   `manager.LoadFromSource(ctx, configkit.AttemptKindReload, source, pipeline)`.
-  Completed reload failures are returned as completed Opskit command results
-  with failure metadata. Context cancellation and deadline failures are returned
-  as failed command results with no result payload.
+  Successful reloads return completed Opskit command results. Admitted reload
+  failures, including context cancellation and deadline expiration, return
+  failed command results with safe top-level failure detail and no result
+  payload. Missing manager, source, or required pipeline steps make handler
+  status not ready and reject commands without recording a load attempt.
+
+  Handler status describes static command usability only. It does not read the
+  source or mirror manager lifecycle and readiness state.
 
 - `ReloadCommandResult`
 
-  Safe operational result payload for reload commands.
+  Safe operational result payload returned by successfully completed reload
+  commands.
 
   Fields:
 
@@ -874,8 +906,11 @@ root module. See the README's
   - `failure`
 
   The payload does not expose typed config values, redacted inspection output,
-  or internal error causes. Revisions, checksums, and public failure detail are
-  operationally visible.
+  or internal error causes. Revisions and checksums are operationally visible.
+  Failed commands expose safe public detail through `CommandResult.Failure`
+  instead of this payload. The payload's `failure` field is normally omitted
+  for successfully completed commands; it remains available to
+  `NewReloadCommandResult` callers building a safe view of a failed managed load.
 
 - `ReloadCommandOption`
 
@@ -895,8 +930,10 @@ root module. See the README's
   fields fall back to Configkit defaults.
 
   Workerkit executes this handler through its generic
-  `workerkit.CommandFromOpskit(...)` adapter. Configkit does not provide a
-  Workerkit-specific command package.
+  `workerkit.CommandFromOpskit(...)` adapter. Failed reloads therefore enter
+  Workerkit's command failure, observation, and configured retry path without
+  automatically failing worker lifecycle or readiness. Configkit does not
+  provide a Workerkit-specific command package.
 
 ## Package `otel`
 

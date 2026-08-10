@@ -174,8 +174,16 @@ readiness, retries, saturation, and failure.
 Configkit observability describes configuration lifecycle only: loads, reloads,
 publication, status, and last-known-good behavior.
 
-When the kits are composed, their telemetry should complement each other
-without mixing responsibilities.
+When a Workerkit-dispatched reload fails, Configkit emits its failed load
+attempt and Workerkit records the failed command attempt and final dispatch
+outcome. Workerkit applies any configured command retry policy. The returned
+command error does not automatically fail worker lifecycle or readiness, while
+Configkit independently reports degraded-but-ready state when a
+last-known-good snapshot remains active.
+
+When the kits are composed, their telemetry complements rather than
+contradicts each other: Configkit describes the reload attempt, and Workerkit
+describes command execution policy and outcome.
 
 ## Examples
 
