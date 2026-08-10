@@ -10,7 +10,6 @@ import (
 	"time"
 
 	configkit "github.com/jaredjakacky/configkit"
-	opskit "github.com/jaredjakacky/opskit"
 	workerkit "github.com/jaredjakacky/workerkit"
 )
 
@@ -27,7 +26,6 @@ type reloadPayload struct {
 	Changed         bool                     `json:"changed"`
 	CurrentChecksum string                   `json:"current_checksum,omitempty"`
 	CurrentRevision string                   `json:"current_revision,omitempty"`
-	Failure         *opskit.Failure          `json:"failure,omitempty"`
 }
 
 func main() {
@@ -78,32 +76,43 @@ func main() {
 	defer shutdownRuntime(ctx, runtime)
 
 	source.Set([]byte(`{"service_name":"worker-demo","port":9090}`), "valid-v2")
-	success := dispatchReload(ctx, runtime)
+	success, err := dispatchReload(ctx, runtime)
+	if err != nil {
+		log.Fatalf("dispatch successful reload command: %v", err)
+	}
 	printPayload("successful reload command", success)
 
 	source.Set([]byte(`{"service_name":"worker-demo","port":0}`), "invalid-v2")
-	failure := dispatchReload(ctx, runtime)
-	printPayload("failed reload command", failure)
+	_, err = dispatchReload(ctx, runtime)
+	if !errors.Is(err, workerkit.ErrOpsCommandFailed) {
+		log.Fatalf("failed reload command error = %v, want ErrOpsCommandFailed", err)
+	}
+	var opsErr *workerkit.OpskitCommandError
+	if !errors.As(err, &opsErr) {
+		log.Fatalf("failed reload command error = %T, want *OpskitCommandError", err)
+	}
+	fmt.Printf("failed reload command: failure=%s: %s\n", opsErr.Failure.Code, opsErr.Failure.Message)
 
 	current, _ := manager.Value()
 	fmt.Printf("current config after failed reload: %+v\n", current)
-	fmt.Println("failed reloads return failure details but preserve the last-known-good config")
+	fmt.Printf("manager state after failed reload: %s\n", manager.LifecycleStatus().State)
+	fmt.Println("failed reloads return command errors while preserving the last-known-good config")
 }
 
-func dispatchReload(ctx context.Context, runtime *workerkit.Runtime) reloadPayload {
+func dispatchReload(ctx context.Context, runtime *workerkit.Runtime) (reloadPayload, error) {
 	result, err := runtime.Dispatch(ctx, workerkit.CommandRequest{
 		Worker: "config",
 		Name:   "config/reload",
 	})
 	if err != nil {
-		log.Fatalf("dispatch reload command: %v", err)
+		return reloadPayload{}, err
 	}
 
 	var payload reloadPayload
 	if err := json.Unmarshal(result.Payload, &payload); err != nil {
-		log.Fatalf("decode reload payload: %v", err)
+		return reloadPayload{}, fmt.Errorf("decode reload payload: %w", err)
 	}
-	return payload
+	return payload, nil
 }
 
 func printPayload(label string, payload reloadPayload) {
@@ -115,9 +124,6 @@ func printPayload(label string, payload reloadPayload) {
 	fmt.Printf("  changed=%t\n", payload.Changed)
 	fmt.Printf("  current_checksum=%s\n", payload.CurrentChecksum)
 	fmt.Printf("  current_revision=%s\n", payload.CurrentRevision)
-	if payload.Failure != nil {
-		fmt.Printf("  failure=%s: %s\n", payload.Failure.Code, payload.Failure.Message)
-	}
 }
 
 func shutdownRuntime(ctx context.Context, runtime *workerkit.Runtime) {

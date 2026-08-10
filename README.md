@@ -229,6 +229,13 @@ systems part of the root package.
 optional. The application owns those functions because it owns the config type
 and its meaning.
 
+`JSONDecoder[T]` is the production-oriented JSON default. It rejects unknown
+fields at ordinary Go struct boundaries and requires exactly one JSON value,
+while accepting leading and trailing whitespace. It otherwise follows
+`encoding/json`, including case-insensitive field matching and duplicate-key
+behavior. Use `LenientJSONDecoder[T]` when ignoring unknown fields is an
+intentional compatibility policy.
+
 `Snapshot[T]` is one successfully loaded, validated, and published value. It
 contains the typed config, source/checksum metadata, and a safe redacted
 inspection view. Failed loads and reloads do not produce snapshots.
@@ -391,16 +398,25 @@ reload := configkit.ReloadCommand(manager, source, pipeline,
 ops.MustRegister(reload, opskit.Informational())
 ```
 
-The command descriptor defaults to `config/reload`. Completed reload failures
-are returned as completed Opskit command results with failure metadata because
-Configkit preserves last-known-good state. Context cancellation and deadline
-failures are returned as failed command results with no result payload.
+The command descriptor defaults to `config/reload`. Successful reloads return
+completed Opskit command results. A configured handler that admits a reload but
+cannot read, decode, default, validate, copy, redact, checksum, or publish it
+returns a failed command with explicit safe public failure detail and no result
+payload. Context cancellation and deadline expiration are also failed command
+results.
 
-The result payload is `configkit.ReloadCommandResult`. It does not include typed
-config values or redacted inspection output. It may include attempt status,
-manager state, revision, checksum, and a stage-specific public failure. The
-internal returned error is not serialized. Recovered panic payloads are also
-replaced with safe stage-specific failures.
+A handler missing its manager, source, or required pipeline steps reports
+not-ready status and rejects commands without recording a Configkit load
+attempt. Handler usability, command outcome, and manager readiness are separate:
+a failed command can leave the manager degraded but ready while it serves a
+last-known-good snapshot.
+
+The successful result payload is `configkit.ReloadCommandResult`. It does not
+include typed config values or redacted inspection output. It may include
+attempt status, manager state, revision, and checksum. Failed commands expose a
+stage-specific `opskit.Failure` instead. The internal returned error is not
+serialized, and recovered panic payloads are replaced with safe stage-specific
+failures.
 
 ## Workerkit reload command execution
 
@@ -431,14 +447,16 @@ if err := runtime.Register(workerkit.WorkerSpec{
 The default command name is `config/reload`.
 
 The command calls `manager.LoadFromSource(ctx, configkit.AttemptKindReload,
-source, pipeline)`. Completed reload failures are reported in the command
-payload instead of as Workerkit command errors, so operators can see failure
-metadata while Configkit preserves last-known-good state. Context cancellation
-and deadline failures are returned as command errors.
+source, pipeline)`. Workerkit maps failed Opskit reload results into
+`ErrOpsCommandFailed`, records command failure status and telemetry, and applies
+the configured command retry policy. Returned command errors do not
+automatically fail the worker lifecycle or runtime readiness. Configkit still
+preserves any last-known-good snapshot and reports its manager state separately.
 
-The payload does not include typed config values or redacted inspection output.
-It may include attempt status, manager state, revision, checksum, and a public
-failure. Internal returned errors and recovered panic payloads are not exposed.
+Successful payloads do not include typed config values or redacted inspection
+output. Failed commands retain the safe public failure code and message through
+Workerkit's `OpskitCommandError`; internal returned errors and recovered panic
+payloads are not exposed.
 
 ## Observability
 
@@ -577,6 +595,22 @@ make govulncheck
 ```
 
 CI runs verification and race tests on the supported Go versions. Release tags are gated by those jobs plus `govulncheck` before publishing.
+
+### Releases
+
+Prepare releases from a committed `main` revision that has been pushed to the
+remote. Before creating the tag, run the complete pre-release suite with one
+command:
+
+```bash
+make release-check
+```
+
+After that succeeds, create and push a stable `v0.x.y` or `v1.x.y` tag. The
+release workflow validates that the tag has the expected Go module version form
+and points to a commit on the `main` release line. It then independently reruns
+`verify`, `test-race`, and `govulncheck` on every supported Go version before
+publishing the GitHub Release.
 
 ## Issues and Scope
 

@@ -168,9 +168,12 @@ The command calls:
 manager.LoadFromSource(ctx, configkit.AttemptKindReload, source, pipeline)
 ```
 
-Failed reloads return a completed command result containing failure metadata.
-That preserves the command payload and lets Configkit report degraded state
-without treating every failed reload as a dispatch failure.
+Successful reloads return completed command results. Admitted reload failures
+return failed Opskit commands with safe public failure detail. Workerkit maps
+those results into its normal command failure, observation, and configured retry
+path without automatically failing the worker lifecycle. Configkit independently
+preserves the last-known-good snapshot, reports degraded manager state, and
+remains ready by default while that snapshot is active.
 
 ## Full Production Shape
 

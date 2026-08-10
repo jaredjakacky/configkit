@@ -152,9 +152,9 @@ opshttp.Mount(server, manager,
 
 ## Reload Command
 
-`configkit.ReloadCommand` returns operational reload metadata. Workerkit's
-generic Opskit command adapter JSON-encodes the same payload when Workerkit
-executes the command:
+`configkit.ReloadCommand` returns operational reload metadata for successful
+commands. Workerkit's generic Opskit command adapter JSON-encodes that payload
+when Workerkit executes the command:
 
 - attempt ID
 - attempt status
@@ -163,11 +163,17 @@ executes the command:
 - changed
 - current checksum
 - current revision
-- public failure code and message
 
 The payload does not include typed config values, redacted inspection output, or
-internal error causes. Revisions, checksums, and public failure detail remain
-visible to whoever can dispatch or inspect the command result.
+internal error causes. Revisions and checksums remain visible to whoever can
+dispatch or inspect the successful command result.
+
+Failed reloads return no result payload. Their Opskit `CommandResult.Failure`
+contains only Configkit's stable public stage code and bounded message.
+Workerkit copies that public detail into `OpskitCommandError`, command failure
+status, and built-in telemetry while keeping arbitrary underlying source and
+pipeline errors private. Full attempt and last-known-good metadata remains
+available through protected Configkit manager inspection surfaces.
 
 ## Future Operational Endpoints
 

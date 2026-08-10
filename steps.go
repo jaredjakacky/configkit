@@ -1,10 +1,13 @@
 package configkit
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io"
 )
 
 // Decoder turns raw source data into a typed configuration value.
@@ -15,14 +18,41 @@ import (
 // with a non-nil context, and direct callers must do the same.
 type Decoder[T any] func(ctx context.Context, data SourceData) (T, error)
 
-// JSONDecoder returns a Decoder that unmarshals SourceData.Data as JSON using
-// the standard library encoding/json package.
+// JSONDecoder returns a Decoder that decodes SourceData.Data as exactly one
+// JSON value using the standard library encoding/json package.
 //
-// This is the vanilla decoder implementation for ordinary JSON configuration.
-// Applications can wire a different Decoder into Pipeline.Decode when they need
-// YAML, TOML, environment-derived data, merged sources, custom parsing, or
-// stricter decode behavior.
+// JSONDecoder rejects object fields that do not match exported, non-ignored
+// fields when decoding into Go structs. Field matching otherwise follows
+// encoding/json semantics, including case-insensitive matches and acceptance of
+// duplicate object keys. Unknown keys remain valid when decoding into maps, and
+// custom UnmarshalJSON implementations control their own decoding behavior.
+// Leading and trailing whitespace are accepted; trailing additional JSON values
+// or other non-whitespace data are rejected.
 func JSONDecoder[T any]() Decoder[T] {
+	return func(ctx context.Context, data SourceData) (T, error) {
+		var value T
+		decoder := json.NewDecoder(bytes.NewReader(data.Data))
+		decoder.DisallowUnknownFields()
+
+		if err := decoder.Decode(&value); err != nil {
+			return value, err
+		}
+		if err := requireJSONEOF(decoder); err != nil {
+			return value, err
+		}
+
+		return value, nil
+	}
+}
+
+// LenientJSONDecoder returns a Decoder that preserves encoding/json.Unmarshal
+// behavior for SourceData.Data.
+//
+// Unlike JSONDecoder, LenientJSONDecoder ignores unknown object fields when
+// decoding into Go structs. It still requires exactly one JSON value, permits
+// leading and trailing whitespace, and rejects trailing additional values or
+// other non-whitespace data.
+func LenientJSONDecoder[T any]() Decoder[T] {
 	return func(ctx context.Context, data SourceData) (T, error) {
 		var value T
 
@@ -32,6 +62,19 @@ func JSONDecoder[T any]() Decoder[T] {
 
 		return value, nil
 	}
+}
+
+func requireJSONEOF(decoder *json.Decoder) error {
+	var trailing json.RawMessage
+	err := decoder.Decode(&trailing)
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	return errors.New("configkit: JSON input must contain exactly one value")
 }
 
 // DefaultApplier applies mechanical defaults to a typed configuration value.

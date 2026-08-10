@@ -37,7 +37,12 @@ type reloadPayload struct {
 	Changed         bool                     `json:"changed"`
 	CurrentChecksum string                   `json:"current_checksum,omitempty"`
 	CurrentRevision string                   `json:"current_revision,omitempty"`
-	Failure         *opskit.Failure          `json:"failure,omitempty"`
+}
+
+type reloadDispatch struct {
+	StatusCode int
+	Body       string
+	Payload    reloadPayload
 }
 
 func main() {
@@ -110,7 +115,11 @@ func main() {
 		Message:     "hello from changed config",
 		APIKey:      "changed-secret",
 	})
-	changed := dispatchReload(server)
+	changedDispatch := dispatchReload(server)
+	if changedDispatch.StatusCode != http.StatusOK {
+		log.Fatalf("dispatch changed config reload: status=%d body=%s", changedDispatch.StatusCode, changedDispatch.Body)
+	}
+	changed := changedDispatch.Payload
 	fmt.Printf(
 		"4. reload command applies changed config: status=%s state=%s published=%t changed=%t\n",
 		changed.AttemptStatus,
@@ -126,19 +135,22 @@ func main() {
 		Message:     "this invalid config is not published",
 		APIKey:      "invalid-secret",
 	})
-	failed := dispatchReload(server)
+	failedDispatch := dispatchReload(server)
+	if failedDispatch.StatusCode != http.StatusInternalServerError {
+		log.Fatalf("dispatch invalid config reload: status=%d body=%s", failedDispatch.StatusCode, failedDispatch.Body)
+	}
 	current, _ := manager.Value()
+	failedStatus := manager.LifecycleStatus()
 	fmt.Printf(
-		"5. failed reload preserves last-known-good: status=%s state=%s published=%t changed=%t",
-		failed.AttemptStatus,
-		failed.ManagerState,
-		failed.Published,
-		failed.Changed,
+		"5. failed reload returns a command error and preserves last-known-good: http_status=%d state=%s",
+		failedDispatch.StatusCode,
+		failedStatus.State,
 	)
-	if failed.Failure != nil {
-		fmt.Printf(" failure=%s: %s", failed.Failure.Code, failed.Failure.Message)
+	if failedStatus.LastFailure != nil && failedStatus.LastFailure.Failure != nil {
+		fmt.Printf(" failure=%s: %s", failedStatus.LastFailure.Failure.Code, failedStatus.LastFailure.Failure.Message)
 	}
 	fmt.Println()
+	fmt.Printf("   command response: %s\n", failedDispatch.Body)
 	fmt.Printf("   current typed config: service=%s port=%d message=%q\n", current.ServiceName, current.Port, current.Message)
 	fmt.Printf("6. status becomes degraded: %s\n", manager.LifecycleStatus().State)
 	fmt.Printf("   /readyz remains ready by default: %s\n", get(server, "/readyz", ""))
@@ -221,7 +233,7 @@ func (configWorker) Stop(ctx context.Context) error {
 	return nil
 }
 
-func dispatchReload(server *servekit.Server) reloadPayload {
+func dispatchReload(server *servekit.Server) reloadDispatch {
 	req := httptest.NewRequest(
 		http.MethodPost,
 		"/admin/workers/commands/dispatch",
@@ -231,8 +243,12 @@ func dispatchReload(server *servekit.Server) reloadPayload {
 	req.Header.Set("X-Admin-Token", "demo")
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, req)
+	dispatch := reloadDispatch{
+		StatusCode: rec.Code,
+		Body:       compact(rec.Body.Bytes()),
+	}
 	if rec.Code != http.StatusOK {
-		log.Fatalf("dispatch config reload: status=%d body=%s", rec.Code, rec.Body.String())
+		return dispatch
 	}
 
 	var response struct {
@@ -249,7 +265,8 @@ func dispatchReload(server *servekit.Server) reloadPayload {
 	if err := json.Unmarshal(response.Data.Result.Payload, &payload); err != nil {
 		log.Fatalf("decode reload payload: %v", err)
 	}
-	return payload
+	dispatch.Payload = payload
+	return dispatch
 }
 
 func get(server *servekit.Server, target string, token string) string {

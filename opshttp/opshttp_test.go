@@ -29,6 +29,22 @@ func TestMountRejectsMissingInputs(t *testing.T) {
 	}
 }
 
+func TestMountRejectsTypedNilInspector(t *testing.T) {
+	var manager *configkit.Manager[opsTestConfig]
+	server := newOpsTestServer()
+
+	if err := opshttp.Mount(server, manager); !errors.Is(err, opshttp.ErrMissingInspector) {
+		t.Fatalf("mount typed-nil inspector error = %v, want opshttp.ErrMissingInspector", err)
+	}
+
+	for _, route := range []string{"/admin/config", "/admin/config/attempts"} {
+		_, status := getOpsTestRoute(t, server, route)
+		if status != http.StatusNotFound {
+			t.Fatalf("%s status = %d, want 404", route, status)
+		}
+	}
+}
+
 func TestMountRegistersInspectionRoute(t *testing.T) {
 	manager := newOpsTestManager(t)
 	server := newOpsTestServer()
@@ -283,6 +299,18 @@ func TestReadinessCheckUsesCoreDegradedReadyPolicy(t *testing.T) {
 
 func TestReadinessCheckMissingProvider(t *testing.T) {
 	err := opshttp.ReadinessCheck(nil)(context.Background())
+	if err == nil {
+		t.Fatal("readiness error = nil, want missing provider")
+	}
+	if !strings.Contains(err.Error(), "readiness provider missing") {
+		t.Fatalf("readiness error = %q, want missing provider", err.Error())
+	}
+}
+
+func TestReadinessCheckTypedNilProvider(t *testing.T) {
+	var manager *configkit.Manager[opsTestConfig]
+
+	err := opshttp.ReadinessCheck(manager)(context.Background())
 	if err == nil {
 		t.Fatal("readiness error = nil, want missing provider")
 	}

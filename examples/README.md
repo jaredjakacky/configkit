@@ -41,11 +41,11 @@ Read the examples in the order listed below. Each one builds on the last. By the
 
 ### Workerkit Integration
 
-**[09-workerkit-reload-command](09-workerkit-reload-command)** — Configkit's root Opskit reload handler runs through Workerkit's generic command adapter. The example performs an initial Configkit load directly, then uses the `config/reload` command for successful and failed reloads, including command payload metadata and last-known-good preservation.
+**[09-workerkit-reload-command](09-workerkit-reload-command)** — Configkit's root Opskit reload handler runs through Workerkit's generic command adapter. The example performs an initial Configkit load directly, then shows a successful `config/reload` payload and a failed reload returned as a typed Workerkit command error while last-known-good config remains active.
 
 ### The Full Picture
 
-**[10-production-composition](10-production-composition)** — The full Kit Series composition. Configkit owns typed configuration lifecycle, Opskit owns the shared operational registry, Servekit owns HTTP service policy, and Workerkit owns command dispatch. The example demonstrates typed config reads, protected inspection, command-driven reload, failed reload preservation, degraded status, and readiness staying ready by default because last-known-good config remains active.
+**[10-production-composition](10-production-composition)** — The full Kit Series composition. Configkit owns typed configuration lifecycle, Opskit owns the shared operational registry, Servekit owns HTTP service policy, and Workerkit owns command dispatch. The example demonstrates typed config reads, protected inspection, command-driven reload, an HTTP command error for a failed reload, last-known-good preservation, degraded manager status, and readiness staying ready by default.
 
 ---
 

@@ -15,6 +15,11 @@ reload := configkit.ReloadCommand(manager, source, pipeline)
 `opskit.CommandHandler`. Its default component name is `config-reload`, and its
 single command descriptor is named `config/reload`.
 
+The handler reports ready status when its manager and source are present and
+`Pipeline.Validate` accepts its required steps. Missing static configuration is
+reported as not ready and causes command rejection without recording a manager
+load attempt. Status does not read the source or mirror manager lifecycle state.
+
 Register the handler with Opskit when the service needs command discovery or
 component inspection:
 
@@ -53,22 +58,37 @@ payload for Workerkit callers.
 A successful reload returns a completed command containing
 `ReloadCommandResult` and publishes the new snapshot.
 
-A reload that reaches Configkit but fails to read, decode, validate, redact, or
-checksum configuration also returns a completed command. Its payload describes
-the failed attempt, and Configkit preserves the last-known-good snapshot when
-one exists. This is a domain operation result, not a Workerkit dispatch
-failure.
+A configured handler that admits a reload but fails to read, decode, apply
+defaults, validate, copy, redact, checksum, or publish configuration returns a
+failed Opskit command with explicit safe public `Failure` detail and no reload
+payload. Configkit records the attempt and preserves the last-known-good
+snapshot when one exists.
 
-Cancellation and deadline expiration return failed Opskit command results with
-no reload payload. Workerkit maps those failures into its normal command error
-and lifecycle handling.
+Cancellation and deadline expiration are also failed Opskit command results.
+Workerkit maps failed results to `ErrOpsCommandFailed`, records
+`LastCommandFailure`, emits command failure and completion observations, and
+applies configured retry policy. A returned command error does not
+automatically fail the Workerkit worker lifecycle or runtime readiness.
+
+Handler and manager state remain separate. A failed reload commonly leaves the
+manager `degraded` but ready by default because its last-known-good snapshot is
+still active. `WithDegradedReady(false)` remains the explicit strict-readiness
+option.
+
+Workerkit retries are opt-in. The reload descriptor's `Idempotent` field remains
+advisory, so applications should use predicate-gated retry and inspect
+`*workerkit.OpskitCommandError`. Broad retry policies can repeat permanent
+failures; predicates should normally exclude `ErrOpsCommandRejected` and retry
+only selected `ErrOpsCommandFailed` failure codes.
 
 ## Operational safety
 
-Reload results never contain the typed configuration value or redacted
-inspection view. They can contain revisions, checksums, and stage-specific
-public failure detail. Treat command discovery and results as operational data
-and authorize every dispatch surface accordingly.
+Successful reload results never contain the typed configuration value or
+redacted inspection view. They can contain revisions and checksums. Failed
+commands expose only stage-specific public failure detail through Opskit and
+Workerkit command error, status, and telemetry surfaces. Treat command discovery
+and outcomes as operational data and authorize every dispatch surface
+accordingly.
 
 Recovered lifecycle panic payloads are replaced with safe stage-specific text.
 Normal errors returned by sources and pipeline functions remain on the direct

@@ -22,6 +22,12 @@
 // return both the stateless load result and the apply result describing
 // publication.
 //
+// Manager-owned lifecycle mutations are serialized. Waiting for lifecycle
+// admission is context-aware: cancellation before admission returns the context
+// error without starting or recording an attempt or changing manager state.
+// Once admitted, cancellation follows the lifecycle's cooperative context
+// checks and does not retroactively erase an attempt or roll back publication.
+//
 // Lifecycle APIs require callers to pass a non-nil context. Passing a nil
 // context is invalid and may panic.
 //

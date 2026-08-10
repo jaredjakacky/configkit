@@ -92,6 +92,10 @@ effective config checksum did not change.
 Manager-owned attempts receive fresh manager-local IDs. Package-level `Load`
 and `LoadFromSource` may leave IDs zero.
 
+A Manager call canceled before it gains serialized lifecycle admission is not
+an attempt. It receives no ID and does not emit events, enter history, or change
+last attempt, last failure, degraded state, or the current snapshot.
+
 ## Attempt History
 
 `Manager.Attempts()` returns retained attempts ordered oldest to newest.
@@ -135,6 +139,11 @@ applyResult, applyErr := manager.Apply(ctx, loadResult)
 `Manager.Apply` validates the `LoadResult` before mutation. It rejects
 malformed results, such as a successful attempt with no snapshot or a failed
 attempt with a snapshot.
+
+Waiting for `Manager.Apply` admission is context-aware. Cancellation before
+admission returns the context error without validation, an attempt ID, status
+mutation, observer notification, or publication. Once admitted, Apply is not
+rolled back by later cancellation.
 
 ## Reload Triggers Are Application-Owned
 

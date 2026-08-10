@@ -88,6 +88,12 @@ decode, validate, redact, checksum, publish, or reload configuration.
 into a typed value, applies defaults, validates the result, produces a safe
 redacted view, and computes a checksum.
 
+`JSONDecoder[T]` rejects unknown fields at Go struct boundaries before defaults
+or validation run, which catches misspelled configuration keys instead of
+silently replacing their intended values with defaults. It accepts exactly one
+JSON value plus surrounding whitespace. Use `LenientJSONDecoder[T]` only when
+ignoring unknown fields is a deliberate compatibility requirement.
+
 `NewManager[T]` creates the state owner. The manager stores the current
 last-known-good snapshot, records attempts, exposes status and inspection, and
 notifies observers.

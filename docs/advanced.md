@@ -126,6 +126,12 @@ applyResult, applyErr := manager.Apply(ctx, loadResult)
 attempt ID, and mutates manager state only when the result is internally
 consistent.
 
+Manager lifecycle admission is serialized and context-aware. If `ctx` is
+canceled before `Apply` is admitted, Apply returns the context error before
+validating or recording the result, assigning an attempt ID, notifying
+observers, or publishing. Once admitted, later cancellation does not roll back
+the apply.
+
 For observability, external apply is intentionally narrower than
 manager-owned load. `Manager.Apply` emits `snapshot_applied` when a successful
 snapshot is published, but it does not emit `load_started`, `load_succeeded`,
