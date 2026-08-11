@@ -36,7 +36,10 @@ lifecycle operation.
 Manager state is updated before `load_succeeded` or `load_failed` is delivered.
 Synchronous completion observers therefore see `LifecycleStatus`,
 `LifecycleInspection`, `Snapshot`, and `Value` consistent with the event they
-are handling. Notifications run without holding the manager state lock.
+are handling. Completion and snapshot events obtain their state from the same
+`ApplyResult` that describes the mutation, so `Event.ManagerState` and
+`Event.Apply.ManagerState` match. Notifications run without holding the manager
+state lock.
 
 Use `AsyncObserver` or hand work off to another goroutine for follow-up work
 that may block, call external systems, or trigger another load/apply operation.
@@ -77,7 +80,8 @@ Successful manager-owned loads emit `load_started`, `load_succeeded`, then
 `snapshot_applied`. Failed loads emit `load_started`, then `load_failed`.
 Completion events are delivered after manager state mutation;
 `snapshot_applied` follows the completion event to preserve lifecycle event
-ordering.
+ordering. Their apply result is an immutable event-time view; a later manager
+operation can change live status without changing the earlier event.
 
 Source metadata, revisions, checksums, and public failure detail should be safe
 for the observer audience. Arbitrary returned error strings are not included.

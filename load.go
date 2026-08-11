@@ -31,7 +31,9 @@ type LoadResult[T any] struct {
 // ManagedLoadResult describes a manager-owned load attempt.
 //
 // Load is the stateless lifecycle result. Apply describes how that result
-// affected the manager's published state.
+// affected the manager's published state, including the lifecycle state
+// produced by this operation. Later manager operations do not change the
+// returned result.
 type ManagedLoadResult[T any] struct {
 	Load  LoadResult[T]
 	Apply ApplyResult

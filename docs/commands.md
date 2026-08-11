@@ -57,7 +57,10 @@ payload for Workerkit callers.
 ## Result semantics
 
 A successful reload returns a completed command containing
-`ReloadCommandResult` and publishes the new snapshot.
+`ReloadCommandResult` and publishes the new snapshot. Its manager state,
+attempt, publication result, revision, and checksum all come from the same
+`ManagedLoadResult`. The handler does not perform a second live manager-status
+read, so a later lifecycle operation cannot alter an earlier command payload.
 
 A configured handler that admits a reload but fails to read, decode, apply
 defaults, validate, copy, redact, checksum, or publish configuration returns a

@@ -146,6 +146,57 @@ func TestReloadCommandSuccessfulReloadPayload(t *testing.T) {
 	}
 }
 
+func TestReloadCommandResultRetainsManagedOperationStateAfterLaterAttempt(t *testing.T) {
+	manager := loadedReloadCommandManager(t)
+	succeeded, err := manager.LoadFromSource(
+		context.Background(),
+		configkit.AttemptKindReload,
+		configkit.NewBytesSource(
+			[]byte(`{"name":"worker","enabled":false,"port":9090}`),
+			configkit.SourceMetadata{Name: "memory", Kind: "memory"},
+			"rev-2",
+		),
+		reloadCommandTestPipeline(),
+	)
+	if err != nil {
+		t.Fatalf("successful reload: %v", err)
+	}
+	if succeeded.Apply.ManagerState != configkit.LifecycleStateLoaded {
+		t.Fatalf("successful apply manager state = %q, want %q", succeeded.Apply.ManagerState, configkit.LifecycleStateLoaded)
+	}
+
+	failed, err := manager.LoadFromSource(
+		context.Background(),
+		configkit.AttemptKindReload,
+		configkit.NewBytesSource(
+			[]byte(`{"name":`),
+			configkit.SourceMetadata{Name: "memory", Kind: "memory"},
+			"rev-3",
+		),
+		reloadCommandTestPipeline(),
+	)
+	if err == nil {
+		t.Fatal("later reload error = nil, want decode failure")
+	}
+	if failed.Apply.ManagerState != configkit.LifecycleStateDegraded {
+		t.Fatalf("later apply manager state = %q, want %q", failed.Apply.ManagerState, configkit.LifecycleStateDegraded)
+	}
+	if state := manager.LifecycleStatus().State; state != configkit.LifecycleStateDegraded {
+		t.Fatalf("live manager state = %q, want %q", state, configkit.LifecycleStateDegraded)
+	}
+
+	payload := configkit.NewReloadCommandResult(succeeded, nil)
+	if payload.AttemptID != succeeded.Load.Attempt.ID || payload.AttemptStatus != configkit.AttemptStatusSucceeded {
+		t.Fatalf("payload attempt = %d/%q, want successful attempt %d", payload.AttemptID, payload.AttemptStatus, succeeded.Load.Attempt.ID)
+	}
+	if payload.ManagerState != configkit.LifecycleStateLoaded {
+		t.Fatalf("payload manager state = %q, want event-time %q", payload.ManagerState, configkit.LifecycleStateLoaded)
+	}
+	if !payload.Published || payload.CurrentRevision != "rev-2" {
+		t.Fatalf("payload = %+v, want published rev-2", payload)
+	}
+}
+
 func TestReloadCommandFailedReloadReturnsFailedCommand(t *testing.T) {
 	manager := loadedReloadCommandManager(t)
 	failingSource := configkit.NewBytesSource(
@@ -662,11 +713,11 @@ func TestNewReloadCommandResultUsesSafeFallbackWhenAttemptHasNoFailure(t *testin
 		Load: configkit.LoadResult[reloadCommandTestConfig]{
 			Attempt: configkit.AttemptRecord{Status: configkit.AttemptStatusFailed},
 		},
+		Apply: configkit.ApplyResult{ManagerState: configkit.LifecycleStateFailed},
 	}
 
 	payload := configkit.NewReloadCommandResult(
 		result,
-		configkit.LifecycleStatus{State: configkit.LifecycleStateFailed},
 		errors.New(secret),
 	)
 	if payload.Failure == nil || payload.Failure.Code != configkit.FailureCodeReloadFailed || payload.Failure.Message != "config reload failed" {

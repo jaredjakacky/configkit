@@ -240,9 +240,12 @@ func TestManagerApplyRejectsResultWithEmptyStatus(t *testing.T) {
 	}
 }
 
-func TestApplyResultJSONIncludesAppliedAt(t *testing.T) {
+func TestApplyResultJSONIncludesManagerStateAndAppliedAt(t *testing.T) {
 	appliedAt := time.Date(2026, 8, 10, 15, 4, 5, 123, time.UTC)
-	data, err := json.Marshal(configkit.ApplyResult{AppliedAt: appliedAt})
+	data, err := json.Marshal(configkit.ApplyResult{
+		ManagerState: configkit.LifecycleStateLoaded,
+		AppliedAt:    appliedAt,
+	})
 	if err != nil {
 		t.Fatalf("marshal apply result: %v", err)
 	}
@@ -254,6 +257,9 @@ func TestApplyResultJSONIncludesAppliedAt(t *testing.T) {
 	if _, ok := fields["applied_at"]; !ok {
 		t.Fatalf("apply result JSON = %s, want applied_at", data)
 	}
+	if _, ok := fields["manager_state"]; !ok {
+		t.Fatalf("apply result JSON = %s, want manager_state", data)
+	}
 
 	var got configkit.ApplyResult
 	if err := json.Unmarshal(data, &got); err != nil {
@@ -261,6 +267,9 @@ func TestApplyResultJSONIncludesAppliedAt(t *testing.T) {
 	}
 	if !got.AppliedAt.Equal(appliedAt) {
 		t.Fatalf("applied at = %v, want %v", got.AppliedAt, appliedAt)
+	}
+	if got.ManagerState != configkit.LifecycleStateLoaded {
+		t.Fatalf("manager state = %q, want %q", got.ManagerState, configkit.LifecycleStateLoaded)
 	}
 }
 
@@ -272,12 +281,15 @@ func assertInvalidLoadResultWithoutMutation(t *testing.T, result configkit.LoadR
 		events = append(events, event)
 	}))
 
-	_, err := manager.Apply(context.Background(), result)
+	apply, err := manager.Apply(context.Background(), result)
 	if !errors.Is(err, configkit.ErrInvalidLoadResult) {
 		t.Fatalf("apply error = %v, want configkit.ErrInvalidLoadResult", err)
 	}
 	if !strings.Contains(err.Error(), detail) {
 		t.Fatalf("apply error = %q, want detail %q", err.Error(), detail)
+	}
+	if apply != (configkit.ApplyResult{}) {
+		t.Fatalf("apply result = %+v, want zero result", apply)
 	}
 	if strings.Contains(err.Error(), "secret-") || strings.Contains(err.Error(), "must remain private") {
 		t.Fatalf("apply error exposed contradictory result data: %q", err.Error())

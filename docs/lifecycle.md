@@ -141,11 +141,13 @@ require no snapshot or checksum and a non-empty stage plus non-zero safe public
 failure detail. `NewSnapshot` does not validate metadata itself;
 `Manager.Apply` is the publication boundary.
 
-Every accepted apply records `ApplyResult.AppliedAt`, including a failed result
-that changes lifecycle status without publishing. This is the UTC time when the
-manager committed the state mutation. It is distinct from the historical
-snapshot `LoadedAt` and attempt `EndedAt` times. Opskit `Status.UpdatedAt`
-reports the apply time when available.
+Every accepted apply records `ApplyResult.ManagerState` and
+`ApplyResult.AppliedAt`, including a failed result that changes lifecycle status
+without publishing. `ManagerState` is the lifecycle state produced by that
+specific mutation, and `AppliedAt` is its UTC commit time. Both remain attached
+to that operation even if a later attempt changes live manager status. They are
+distinct from the historical snapshot `LoadedAt` and attempt `EndedAt` times.
+Opskit `Status.UpdatedAt` reports the apply time when available.
 
 `Manager.Apply` records status and attempts. When it publishes a successful
 snapshot, it emits `snapshot_applied`. It does not emit `load_started`,
@@ -164,6 +166,7 @@ load_started -> record manager failure -> load_failed
 
 The `load_started` event captures pre-attempt manager state. Completion and
 snapshot events capture resulting state and include the `ApplyResult`.
+`Event.ManagerState` and `Event.Apply.ManagerState` match for these events.
 Synchronous completion observers can therefore use read-only manager APIs and
 see state consistent with the event. Async observers should use the event as
 the event-time view because the manager may have advanced before delivery.

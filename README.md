@@ -417,10 +417,12 @@ the manager degraded but ready while it serves a last-known-good snapshot.
 
 The successful result payload is `configkit.ReloadCommandResult`. It does not
 include typed config values or redacted inspection output. It may include
-attempt status, manager state, revision, and checksum. Failed commands expose a
-stage-specific `opskit.Failure` instead. The internal returned error is not
-serialized, and recovered panic payloads are replaced with safe stage-specific
-failures.
+attempt status, the manager state produced by that reload, revision, and
+checksum. The payload is built entirely from the reload's `ManagedLoadResult`,
+so a later lifecycle attempt cannot change its interpretation. Failed commands
+expose a stage-specific `opskit.Failure` instead. The internal returned error is
+not serialized, and recovered panic payloads are replaced with safe
+stage-specific failures.
 
 ## Workerkit reload command execution
 
@@ -485,8 +487,9 @@ can deadlock. Read-only calls such as `LifecycleStatus`, `LifecycleInspection`, 
 
 Manager state is updated before `load_succeeded` or `load_failed` is delivered,
 so synchronous completion observers see state consistent with the event. A
-completion event includes the resulting `ApplyResult`; failed reloads therefore
-show the retained last-known-good snapshot without exposing its typed value.
+completion event includes the resulting `ApplyResult`; its `ManagerState`
+matches the event-time state. Failed reloads therefore show the retained
+last-known-good snapshot without exposing its typed value.
 
 Use `AsyncObserver` when an observer may block:
 

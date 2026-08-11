@@ -131,7 +131,8 @@ configuration into a framework.
 - `ManagedLoadResult[T]`
 
   Result returned by manager-owned load methods. `Load` is the stateless
-  lifecycle result. `Apply` describes how that result affected manager state.
+  lifecycle result. `Apply` is the immutable event-time description of how that
+  result affected manager state, including the resulting lifecycle state.
 
 - `ManagedLoadResult[T].Load`
 
@@ -665,6 +666,12 @@ configuration into a framework.
 
   Snapshot metadata that is current after apply, if any.
 
+- `ApplyResult.ManagerState`
+
+  Lifecycle state resulting from this accepted apply. It is populated for
+  successful publication and accepted failure, and remains empty when no
+  manager mutation occurred.
+
 - `ApplyResult.AppliedAt`
 
   UTC time when the manager accepted the structurally valid result and
@@ -947,6 +954,12 @@ root module. See the README's
   instead of this payload. The payload's `failure` field is normally omitted
   for successfully completed commands; it remains available to
   `NewReloadCommandResult` callers building a safe view of a failed managed load.
+
+- `NewReloadCommandResult[T](result ManagedLoadResult[T], loadErr error)`
+
+  Builds the safe payload entirely from one managed load and its captured apply
+  result. It does not read live manager status, so later lifecycle operations
+  cannot change the payload's event-time manager state.
 
 - `ReloadCommandOption`
 

@@ -140,8 +140,10 @@ Configkit does not re-run application validation, recompute checksums, validate
 source or revision formats, or impose checksum formats at this boundary.
 
 `SnapshotMetadata.LoadedAt` records when the stateless load produced the
-snapshot. `ApplyResult.AppliedAt` records when the manager committed the result,
-which may be much later. Configkit intentionally permits delayed and
+snapshot. `ApplyResult.ManagerState` records the lifecycle state resulting from
+the apply, and `ApplyResult.AppliedAt` records when the manager committed it,
+which may be much later. These fields remain an immutable view of that mutation
+after later lifecycle operations. Configkit intentionally permits delayed and
 out-of-order external application because revision and rollback policy belongs
 to the application. Attempt history and manager-local attempt IDs follow apply
 order for external results, not necessarily `Attempt.EndedAt` order.

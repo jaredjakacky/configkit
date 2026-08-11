@@ -125,12 +125,18 @@ A limit less than or equal to zero disables attempt history while preserving
 - `Changed`: the current checksum differs from the previous checksum
 - `Previous`: previous snapshot metadata, if any
 - `Current`: current snapshot metadata, if any
+- `ManagerState`: lifecycle state resulting from this accepted apply
 - `AppliedAt`: UTC time when the manager committed this result
 
-`AppliedAt` is set for every accepted apply. A failed result does not publish a
-snapshot, but it still updates attempt history and lifecycle state. Snapshot
-`LoadedAt` and attempt `EndedAt` remain the historical load times and can be
-much earlier for an externally loaded result.
+`ManagerState` and `AppliedAt` are set for every accepted apply. A failed result
+does not publish a snapshot, but it still updates attempt history and lifecycle
+state. Invalid results and calls canceled before lifecycle admission return a
+zero `ApplyResult`. Snapshot `LoadedAt` and attempt `EndedAt` remain the
+historical load times and can be much earlier for an externally loaded result.
+
+An `ApplyResult` is the immutable event-time view of its manager mutation.
+Later lifecycle operations can change live manager status but do not change the
+state represented by an earlier result.
 
 Use it when operators or reload commands need to distinguish "reload succeeded"
 from "effective config changed."

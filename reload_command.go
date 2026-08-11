@@ -201,8 +201,7 @@ func (h *ReloadCommandHandler[T]) HandleCommand(ctx context.Context, request ops
 		)
 	}
 
-	status := h.manager.LifecycleStatus()
-	payload := NewReloadCommandResult(result, status, loadErr)
+	payload := NewReloadCommandResult(result, loadErr)
 	if loadErr != nil || result.Load.Attempt.Status != AttemptStatusSucceeded {
 		return opskit.FailedCommandWithFailure(
 			"config reload failed",
@@ -233,12 +232,13 @@ type ReloadCommandResult struct {
 	Failure         *opskit.Failure `json:"failure,omitempty"`
 }
 
-// NewReloadCommandResult builds the safe operational reload command payload.
-func NewReloadCommandResult[T any](result ManagedLoadResult[T], status LifecycleStatus, loadErr error) ReloadCommandResult {
+// NewReloadCommandResult builds the safe operational reload command payload
+// from one managed load and its resulting manager mutation.
+func NewReloadCommandResult[T any](result ManagedLoadResult[T], loadErr error) ReloadCommandResult {
 	payload := ReloadCommandResult{
 		AttemptID:     result.Load.Attempt.ID,
 		AttemptStatus: result.Load.Attempt.Status,
-		ManagerState:  status.State,
+		ManagerState:  result.Apply.ManagerState,
 		Published:     result.Apply.Published,
 		Changed:       result.Apply.Changed,
 	}
