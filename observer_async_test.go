@@ -145,6 +145,9 @@ func TestAsyncObserverRetainsEventTimeManagerState(t *testing.T) {
 	if event.Apply == nil || !event.Apply.Published {
 		t.Fatalf("event apply = %+v, want published initial snapshot", event.Apply)
 	}
+	if event.Apply.ManagerState != event.ManagerState {
+		t.Fatalf("apply state = %q, event state = %q; want equal", event.Apply.ManagerState, event.ManagerState)
+	}
 }
 
 func TestAsyncObserverDropsWhenBufferFull(t *testing.T) {

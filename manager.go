@@ -291,7 +291,8 @@ func (m *Manager[T]) Value() (T, bool) {
 // must have no snapshot or checksum and must have a failure stage and safe
 // public failure detail. Apply assigns a fresh manager-local attempt ID
 // regardless of any ID on the input result. Apply is serialized with
-// manager-owned load attempts.
+// manager-owned load attempts. The returned ApplyResult captures the lifecycle
+// state produced by this mutation; later manager operations do not change it.
 //
 // If ctx is canceled before Apply gains lifecycle admission, Apply returns the
 // context error without validating or recording the result, assigning an
@@ -314,21 +315,20 @@ func (m *Manager[T]) Apply(ctx context.Context, result LoadResult[T]) (ApplyResu
 	}
 	m.assignAttemptID(&result)
 
-	applyResult, managerState := m.apply(result)
-	m.notifySnapshotApplied(ctx, result.Attempt, applyResult, managerState)
+	applyResult := m.apply(result)
+	m.notifySnapshotApplied(ctx, result.Attempt, applyResult)
 	return applyResult, nil
 }
 
-func (m *Manager[T]) applyValidated(result LoadResult[T]) (ApplyResult, LifecycleState, error) {
+func (m *Manager[T]) applyValidated(result LoadResult[T]) (ApplyResult, error) {
 	if err := validateLoadResult(result); err != nil {
-		return ApplyResult{}, m.LifecycleStatus().State, err
+		return ApplyResult{}, err
 	}
 
-	applyResult, managerState := m.apply(result)
-	return applyResult, managerState, nil
+	return m.apply(result), nil
 }
 
-func (m *Manager[T]) apply(result LoadResult[T]) (ApplyResult, LifecycleState) {
+func (m *Manager[T]) apply(result LoadResult[T]) ApplyResult {
 	var applyResult ApplyResult
 
 	m.mu.Lock()
@@ -359,13 +359,13 @@ func (m *Manager[T]) apply(result LoadResult[T]) (ApplyResult, LifecycleState) {
 		m.lastFailure = &failure
 	}
 
+	applyResult.ManagerState = m.lifecycleStateLocked()
 	applyStored := cloneApplyResult(applyResult)
 	m.lastApply = &applyStored
-	managerState := m.lifecycleStateLocked()
 
 	m.mu.Unlock()
 
-	return applyResult, managerState
+	return applyResult
 }
 
 // Load runs one load lifecycle and applies the result to the manager.
@@ -397,12 +397,12 @@ func (m *Manager[T]) Load(ctx context.Context, kind AttemptKind, data SourceData
 	loadResult, err := Load(ctx, kind, data, pipeline)
 	loadResult.Attempt.ID = attemptID
 
-	applyResult, managerState, applyErr := m.applyValidated(loadResult)
+	applyResult, applyErr := m.applyValidated(loadResult)
 	if err == nil {
 		err = applyErr
 	}
-	m.notifyLoadFinished(ctx, attemptID, kind, loadResult, applyResult, managerState, err)
-	m.notifySnapshotApplied(ctx, loadResult.Attempt, applyResult, managerState)
+	m.notifyLoadFinished(ctx, attemptID, kind, loadResult, applyResult, err)
+	m.notifySnapshotApplied(ctx, loadResult.Attempt, applyResult)
 	return ManagedLoadResult[T]{
 		Load:  loadResult,
 		Apply: applyResult,
@@ -447,12 +447,12 @@ func (m *Manager[T]) LoadFromSource(ctx context.Context, kind AttemptKind, sourc
 	loadResult, err := loadFromSourceWithMetadata(ctx, kind, source, pipeline, startedAt, sourceMetadata, metadataErr)
 	loadResult.Attempt.ID = attemptID
 
-	applyResult, managerState, applyErr := m.applyValidated(loadResult)
+	applyResult, applyErr := m.applyValidated(loadResult)
 	if err == nil {
 		err = applyErr
 	}
-	m.notifyLoadFinished(ctx, attemptID, kind, loadResult, applyResult, managerState, err)
-	m.notifySnapshotApplied(ctx, loadResult.Attempt, applyResult, managerState)
+	m.notifyLoadFinished(ctx, attemptID, kind, loadResult, applyResult, err)
+	m.notifySnapshotApplied(ctx, loadResult.Attempt, applyResult)
 	return ManagedLoadResult[T]{
 		Load:  loadResult,
 		Apply: applyResult,
@@ -473,7 +473,7 @@ func (m *Manager[T]) notifyLoadStarted(ctx context.Context, attemptID uint64, ki
 	})
 }
 
-func (m *Manager[T]) notifyLoadFinished(ctx context.Context, attemptID uint64, kind AttemptKind, result LoadResult[T], apply ApplyResult, managerState LifecycleState, err error) {
+func (m *Manager[T]) notifyLoadFinished(ctx context.Context, attemptID uint64, kind AttemptKind, result LoadResult[T], apply ApplyResult, err error) {
 	eventKind := EventKindLoadSucceeded
 	if err != nil {
 		eventKind = EventKindLoadFailed
@@ -490,7 +490,7 @@ func (m *Manager[T]) notifyLoadFinished(ctx context.Context, attemptID uint64, k
 	m.notify(ctx, Event{
 		Kind:          eventKind,
 		ComponentName: m.componentName(),
-		ManagerState:  managerState,
+		ManagerState:  apply.ManagerState,
 		AttemptID:     attemptID,
 		AttemptKind:   kind,
 		Source:        attempt.Source,
@@ -502,7 +502,7 @@ func (m *Manager[T]) notifyLoadFinished(ctx context.Context, attemptID uint64, k
 	})
 }
 
-func (m *Manager[T]) notifySnapshotApplied(ctx context.Context, attempt AttemptRecord, apply ApplyResult, managerState LifecycleState) {
+func (m *Manager[T]) notifySnapshotApplied(ctx context.Context, attempt AttemptRecord, apply ApplyResult) {
 	if !apply.Published || apply.Current == nil {
 		return
 	}
@@ -513,7 +513,7 @@ func (m *Manager[T]) notifySnapshotApplied(ctx context.Context, attempt AttemptR
 	m.notify(ctx, Event{
 		Kind:          EventKindSnapshotApplied,
 		ComponentName: m.componentName(),
-		ManagerState:  managerState,
+		ManagerState:  apply.ManagerState,
 		AttemptID:     attempt.ID,
 		AttemptKind:   attempt.Kind,
 		Source:        attempt.Source,

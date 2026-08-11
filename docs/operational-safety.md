@@ -143,7 +143,8 @@ last apply results, and redacted config values chosen by the application.
 Snapshot `LoadedAt` is the stateless load-completion time. ApplyResult
 `AppliedAt` is the later manager mutation time and is used for Opskit
 `Status.UpdatedAt` when available. Both are operational timestamps and reveal
-when configuration work and state changes occurred.
+when configuration work and state changes occurred. `ApplyResult.ManagerState`
+is the lifecycle state produced by that mutation, not a later live status read.
 
 `configkit/opshttp` exposes read-only operational state through Servekit.
 

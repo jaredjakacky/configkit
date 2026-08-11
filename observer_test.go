@@ -246,6 +246,9 @@ func TestManagerNotifiesLoadLifecycleEvents(t *testing.T) {
 		if events[i].Apply == nil || !events[i].Apply.Published {
 			t.Fatalf("event %d apply = %+v, want published result", i, events[i].Apply)
 		}
+		if events[i].Apply.ManagerState != events[i].ManagerState {
+			t.Fatalf("event %d apply state = %q, event state = %q; want equal", i, events[i].Apply.ManagerState, events[i].ManagerState)
+		}
 	}
 }
 
@@ -279,6 +282,11 @@ func TestManagerEventsDistinguishManagerLocalAttemptIDs(t *testing.T) {
 	if events[0].ComponentName != "primary-config" || events[1].ComponentName != "secondary-config" {
 		t.Fatalf("component names = %q, %q; want distinct configured identities", events[0].ComponentName, events[1].ComponentName)
 	}
+	for i, event := range events {
+		if event.ManagerState != configkit.LifecycleStateLoaded || event.Apply == nil || event.Apply.ManagerState != event.ManagerState {
+			t.Fatalf("event %d state/apply = %q/%+v, want matching loaded state", i, event.ManagerState, event.Apply)
+		}
+	}
 }
 
 func TestLoadSucceededObserverSeesResultingManagerState(t *testing.T) {
@@ -299,6 +307,9 @@ func TestLoadSucceededObserverSeesResultingManagerState(t *testing.T) {
 		}
 		if event.Apply == nil || !event.Apply.Published || event.Apply.Current == nil {
 			t.Fatalf("completion apply = %+v, want published current snapshot", event.Apply)
+		}
+		if event.Apply.ManagerState != event.ManagerState {
+			t.Fatalf("apply state = %q, event state = %q; want equal", event.Apply.ManagerState, event.ManagerState)
 		}
 	})
 	manager = configkit.NewManager[stepsTestConfig](configkit.WithObservers(observer))
@@ -327,6 +338,9 @@ func TestLoadFromSourceSucceededObserverSeesResultingManagerState(t *testing.T) 
 		}
 		if event.Apply == nil || !event.Apply.Published {
 			t.Fatalf("completion apply = %+v, want published result", event.Apply)
+		}
+		if event.Apply.ManagerState != event.ManagerState {
+			t.Fatalf("apply state = %q, event state = %q; want equal", event.Apply.ManagerState, event.ManagerState)
 		}
 	})
 	manager = configkit.NewManager[stepsTestConfig](configkit.WithObservers(observer))
@@ -358,6 +372,9 @@ func TestInitialLoadFailedObserverSeesFailedManagerState(t *testing.T) {
 		}
 		if status.LastFailure == nil || event.Apply == nil || event.Apply.Published {
 			t.Fatalf("status = %+v, apply = %+v; want recorded unpublished failure", status, event.Apply)
+		}
+		if event.Apply.ManagerState != event.ManagerState {
+			t.Fatalf("apply state = %q, event state = %q; want equal", event.Apply.ManagerState, event.ManagerState)
 		}
 		if _, ok := manager.Snapshot(); ok {
 			t.Fatal("snapshot available during initial failure completion")
@@ -396,6 +413,9 @@ func TestReloadFailedObserverSeesDegradedLastKnownGoodState(t *testing.T) {
 		}
 		if event.Apply.Previous.Checksum != event.Apply.Current.Checksum {
 			t.Fatalf("apply previous checksum = %q, current = %q; want retained snapshot", event.Apply.Previous.Checksum, event.Apply.Current.Checksum)
+		}
+		if event.Apply.ManagerState != event.ManagerState {
+			t.Fatalf("apply state = %q, event state = %q; want equal", event.Apply.ManagerState, event.ManagerState)
 		}
 	})
 	manager = configkit.NewManager[stepsTestConfig](configkit.WithObservers(observer))

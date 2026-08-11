@@ -24,6 +24,10 @@ type ApplyResult struct {
 	// Current describes the snapshot that is current after apply, if any.
 	Current *SnapshotMetadata `json:"current,omitempty"`
 
+	// ManagerState is the lifecycle state resulting from this accepted apply.
+	// It is empty when no manager mutation occurred.
+	ManagerState LifecycleState `json:"manager_state"`
+
 	// AppliedAt is when the manager accepted this result and committed its
 	// lifecycle-state mutation. It is set for both successful and failed
 	// accepted results.
