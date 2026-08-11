@@ -70,10 +70,16 @@ fmt.Println(result.Apply.Changed)
 `Published` means a snapshot became current.
 
 `Changed` means the effective checksum differs from the previous current
-snapshot.
+snapshot. Published snapshots have non-empty checksums, although Configkit does
+not prescribe their format or attempt to detect collisions in custom checksum
+implementations.
 
 A reload can publish with `Changed=false` when the input was valid but the
 effective config checksum did not change.
+
+A Checksummer returning an empty string with no error does not mean
+"unchanged." It fails at the checksum stage, records the safe
+`checksum_failed` failure, and preserves the last-known-good snapshot.
 
 ## Attempt Records
 
@@ -119,6 +125,12 @@ A limit less than or equal to zero disables attempt history while preserving
 - `Changed`: the current checksum differs from the previous checksum
 - `Previous`: previous snapshot metadata, if any
 - `Current`: current snapshot metadata, if any
+- `AppliedAt`: UTC time when the manager committed this result
+
+`AppliedAt` is set for every accepted apply. A failed result does not publish a
+snapshot, but it still updates attempt history and lifecycle state. Snapshot
+`LoadedAt` and attempt `EndedAt` remain the historical load times and can be
+much earlier for an externally loaded result.
 
 Use it when operators or reload commands need to distinguish "reload succeeded"
 from "effective config changed."
@@ -137,8 +149,15 @@ applyResult, applyErr := manager.Apply(ctx, loadResult)
 ```
 
 `Manager.Apply` validates the `LoadResult` before mutation. It rejects
-malformed results, such as a successful attempt with no snapshot or a failed
-attempt with a snapshot.
+malformed results. A successful attempt must include a snapshot, matching source
+and revision, matching non-empty checksums, and no failure stage or detail. A
+failed attempt must include no snapshot or checksum and must include a failure
+stage plus non-zero safe public failure detail.
+
+Delayed and out-of-order application remains legal. Configkit does not infer
+staleness from timestamps or impose source revision policy. For externally
+loaded results, manager-local attempt IDs and retained history reflect apply
+order rather than load completion order.
 
 Waiting for `Manager.Apply` admission is context-aware. Cancellation before
 admission returns the context error without validation, an attempt ID, status

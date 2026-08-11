@@ -32,6 +32,7 @@ export GOCACHE ?= $(CURDIR)/.cache/go-build
 	tidy-check \
 	govulncheck \
 	verify \
+	release-state-check \
 	release-check \
 	clean
 
@@ -109,8 +110,65 @@ govulncheck: ## Run the pinned govulncheck tool against the main module packages
 verify: fmt-check root-deps-check vet test build-examples tidy-check ## Run the local verification suite.
 	@echo "==> verification passed"
 
-release-check: verify test-race govulncheck ## Run all required pre-tag release checks.
-	@echo "==> release checks passed"
+release-state-check: ## Verify the local checkout is the pushed main release tip.
+	@echo "==> checking release state"
+	if ! branch="$$(git symbolic-ref --quiet --short HEAD)"; then
+		echo "Release checks require an attached main branch."
+		exit 1
+	fi
+	if [ "$$branch" != "main" ]; then
+		echo "Release checks must run from main; current branch is $$branch."
+		exit 1
+	fi
+
+	state="$$(git status --porcelain=v1 --untracked-files=all --ignore-submodules=none)"
+	if [ -n "$$state" ]; then
+		echo "Release checks require a clean working tree:"
+		printf '%s\n' "$$state"
+		exit 1
+	fi
+
+	if ! git fetch --quiet --no-tags origin '+refs/heads/main:refs/remotes/origin/main'; then
+		echo "Could not refresh origin/main."
+		exit 1
+	fi
+
+	head="$$(git rev-parse --verify 'HEAD^{commit}')"
+	remote_main="$$(git rev-parse --verify 'refs/remotes/origin/main^{commit}')"
+	if [ "$$head" != "$$remote_main" ]; then
+		echo "HEAD ($$head) does not match origin/main ($$remote_main)."
+		exit 1
+	fi
+
+release-check: release-state-check ## Validate the exact pushed commit before tagging.
+	@echo "==> validating committed release tree"
+	release_commit="$$(git rev-parse --verify 'HEAD^{commit}')"
+	release_root="$$(mktemp -d "$${TMPDIR:-/tmp}/configkit-release.XXXXXX")"
+	release_dir="$$release_root/tree"
+
+	cleanup() {
+		git worktree remove --force "$$release_dir" >/dev/null 2>&1 || true
+		if [ -n "$${release_root:-}" ]; then
+			rm -rf "$$release_root"
+		fi
+	}
+	trap cleanup 0 HUP INT TERM
+
+	git worktree add --quiet --detach "$$release_dir" "$$release_commit"
+
+	GOWORK=off $(MAKE) -C "$$release_dir" verify
+	GOWORK=off $(MAKE) -C "$$release_dir" test-race
+	GOWORK=off $(MAKE) -C "$$release_dir" govulncheck
+
+	state="$$(git -C "$$release_dir" status --porcelain=v1 --untracked-files=all --ignore-submodules=none)"
+	if [ -n "$$state" ]; then
+		echo "Release validation modified the committed worktree:"
+		printf '%s\n' "$$state"
+		exit 1
+	fi
+
+	$(MAKE) release-state-check
+	echo "==> release checks passed for $$release_commit"
 
 clean: ## Remove local build outputs and caches.
 	@echo "==> clean"

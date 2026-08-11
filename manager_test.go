@@ -110,6 +110,163 @@ func TestManagerApplyFailedPreservesCurrentSnapshot(t *testing.T) {
 	}
 }
 
+func TestManagerApplyRecordsAppliedAtForSuccessfulAndFailedResults(t *testing.T) {
+	tests := []struct {
+		name       string
+		result     func(time.Time) configkit.LoadResult[stepsTestConfig]
+		wantState  configkit.LifecycleState
+		wantLoaded bool
+	}{
+		{
+			name: "successful",
+			result: func(endedAt time.Time) configkit.LoadResult[stepsTestConfig] {
+				return succeededStatusTestResultAt("v1", "sum-1", endedAt)
+			},
+			wantState:  configkit.LifecycleStateLoaded,
+			wantLoaded: true,
+		},
+		{
+			name: "failed",
+			result: func(endedAt time.Time) configkit.LoadResult[stepsTestConfig] {
+				return failedStatusTestResultAt("safe failure", endedAt)
+			},
+			wantState: configkit.LifecycleStateFailed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := configkit.NewManager[stepsTestConfig]()
+			endedAt := time.Now().UTC().Add(-2 * time.Hour)
+			result := tt.result(endedAt)
+
+			before := time.Now().UTC()
+			apply, err := manager.Apply(context.Background(), result)
+			after := time.Now().UTC()
+			if err != nil {
+				t.Fatalf("apply result: %v", err)
+			}
+			if apply.AppliedAt.Before(before) || apply.AppliedAt.After(after) {
+				t.Fatalf("applied at = %v, want between %v and %v", apply.AppliedAt, before, after)
+			}
+			if apply.AppliedAt.Location() != time.UTC {
+				t.Fatalf("applied at location = %v, want UTC", apply.AppliedAt.Location())
+			}
+
+			status := manager.LifecycleStatus()
+			if status.State != tt.wantState {
+				t.Fatalf("state = %q, want %q", status.State, tt.wantState)
+			}
+			if status.LastApply == nil || !status.LastApply.AppliedAt.Equal(apply.AppliedAt) {
+				t.Fatalf("last apply = %+v, want applied_at %v", status.LastApply, apply.AppliedAt)
+			}
+			if status.LastAttempt == nil || !status.LastAttempt.EndedAt.Equal(endedAt) {
+				t.Fatalf("last attempt = %+v, want ended_at %v preserved", status.LastAttempt, endedAt)
+			}
+			if tt.wantLoaded {
+				if status.Current == nil || !status.Current.LoadedAt.Equal(endedAt) {
+					t.Fatalf("current = %+v, want loaded_at %v preserved", status.Current, endedAt)
+				}
+			}
+		})
+	}
+}
+
+func TestManagerOwnedLoadsRecordAppliedAt(t *testing.T) {
+	tests := []struct {
+		name string
+		load func(*configkit.Manager[stepsTestConfig]) (configkit.ManagedLoadResult[stepsTestConfig], error)
+	}{
+		{
+			name: "load",
+			load: func(manager *configkit.Manager[stepsTestConfig]) (configkit.ManagedLoadResult[stepsTestConfig], error) {
+				return manager.Load(context.Background(), configkit.AttemptKindInitialLoad, configkit.SourceData{
+					Data:     []byte(`{"name":"api","enabled":true,"port":8080}`),
+					Metadata: configkit.SourceMetadata{Name: "memory", Kind: "memory"},
+					Revision: "v1",
+				}, testPipeline())
+			},
+		},
+		{
+			name: "load from source",
+			load: func(manager *configkit.Manager[stepsTestConfig]) (configkit.ManagedLoadResult[stepsTestConfig], error) {
+				source := configkit.NewBytesSource(
+					[]byte(`{"name":"api","enabled":true,"port":8080}`),
+					configkit.SourceMetadata{Name: "memory", Kind: "memory"},
+					"v1",
+				)
+				return manager.LoadFromSource(context.Background(), configkit.AttemptKindInitialLoad, source, testPipeline())
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := configkit.NewManager[stepsTestConfig]()
+			result, err := tt.load(manager)
+			if err != nil {
+				t.Fatalf("manager load: %v", err)
+			}
+			if result.Apply.AppliedAt.IsZero() {
+				t.Fatal("apply applied_at is zero")
+			}
+			if result.Apply.AppliedAt.Before(result.Load.Attempt.EndedAt) {
+				t.Fatalf("applied at = %v, want at or after attempt ended_at %v", result.Apply.AppliedAt, result.Load.Attempt.EndedAt)
+			}
+			status := manager.LifecycleStatus()
+			if status.LastApply == nil || !status.LastApply.AppliedAt.Equal(result.Apply.AppliedAt) {
+				t.Fatalf("last apply = %+v, want applied_at %v", status.LastApply, result.Apply.AppliedAt)
+			}
+		})
+	}
+}
+
+func TestManagerLoadEmptyChecksumPreservesLastKnownGood(t *testing.T) {
+	manager := configkit.NewManager[stepsTestConfig]()
+	if _, err := manager.Apply(context.Background(), succeededStatusTestResult("v1", "sum-1")); err != nil {
+		t.Fatalf("seed manager: %v", err)
+	}
+	pipeline := testPipeline()
+	pipeline.Checksum = func(context.Context, stepsTestConfig) (string, error) {
+		return "", nil
+	}
+
+	result, err := manager.Load(context.Background(), configkit.AttemptKindReload, configkit.SourceData{
+		Data:     []byte(`{"name":"worker","enabled":false,"port":9090}`),
+		Revision: "v2",
+	}, pipeline)
+	if err == nil || !strings.Contains(err.Error(), "checksummer returned an empty checksum") {
+		t.Fatalf("manager reload error = %v, want private empty-checksum contract failure", err)
+	}
+	if result.Load.Attempt.Status != configkit.AttemptStatusFailed || result.Load.Attempt.Stage != configkit.AttemptStageChecksum {
+		t.Fatalf("load attempt = %+v, want failed checksum attempt", result.Load.Attempt)
+	}
+	if result.Load.Attempt.Failure == nil || result.Load.Attempt.Failure.Code != configkit.FailureCodeChecksumFailed || result.Load.Attempt.Failure.Message != "config checksum failed" {
+		t.Fatalf("load failure = %+v, want safe checksum failure", result.Load.Attempt.Failure)
+	}
+	if result.Apply.Published || result.Apply.Changed {
+		t.Fatalf("apply published/changed = %t/%t, want false/false", result.Apply.Published, result.Apply.Changed)
+	}
+	if result.Apply.AppliedAt.IsZero() {
+		t.Fatal("failed apply applied_at is zero")
+	}
+	if result.Apply.Previous == nil || result.Apply.Current == nil || result.Apply.Previous.Checksum != "sum-1" || result.Apply.Current.Checksum != "sum-1" {
+		t.Fatalf("apply = %+v, want retained sum-1 snapshot", result.Apply)
+	}
+
+	value, ok := manager.Value()
+	if !ok || value.Name != "api" || !value.Enabled || value.Port != 8080 {
+		t.Fatalf("manager value = %+v, ok = %t; want last-known-good api config", value, ok)
+	}
+	status := manager.LifecycleStatus()
+	if status.State != configkit.LifecycleStateDegraded || status.Current == nil || status.Current.Revision != "v1" {
+		t.Fatalf("manager status = %+v, want degraded with v1 snapshot", status)
+	}
+	if status.LastFailure == nil || status.LastFailure.Stage != configkit.AttemptStageChecksum {
+		t.Fatalf("last failure = %+v, want checksum-stage failure", status.LastFailure)
+	}
+}
+
 func TestManagerApplyRejectsInvalidLoadResultWithoutMutation(t *testing.T) {
 	manager := configkit.NewManager[stepsTestConfig]()
 
@@ -696,23 +853,70 @@ func TestManagerLoadAppliesSuccessfulResult(t *testing.T) {
 }
 
 func TestManagerLoadFromSourceMissingSourceRecordsFailure(t *testing.T) {
-	manager := configkit.NewManager[stepsTestConfig]()
+	var typedNil *typedNilTestSource
+	tests := []struct {
+		name   string
+		source configkit.Source
+	}{
+		{name: "nil"},
+		{name: "typed nil", source: typedNil},
+	}
 
-	result, err := manager.LoadFromSource(context.Background(), configkit.AttemptKindReload, nil, testPipeline())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := configkit.NewManager[stepsTestConfig]()
+
+			result, err := manager.LoadFromSource(context.Background(), configkit.AttemptKindReload, tt.source, testPipeline())
+			if !errors.Is(err, configkit.ErrMissingSource) {
+				t.Fatalf("load from missing source error = %v, want configkit.ErrMissingSource", err)
+			}
+			if result.Load.Attempt.ID == 0 {
+				t.Fatal("load attempt id = 0, want manager-assigned id")
+			}
+			if result.Load.Attempt.Status != configkit.AttemptStatusFailed {
+				t.Fatalf("attempt status = %q, want %q", result.Load.Attempt.Status, configkit.AttemptStatusFailed)
+			}
+			if result.Load.Attempt.Failure == nil || result.Load.Attempt.Failure.Code != configkit.FailureCodeMissingSource {
+				t.Fatalf("attempt failure = %+v, want missing source", result.Load.Attempt.Failure)
+			}
+			if result.Apply.Published {
+				t.Fatal("published = true, want false")
+			}
+			if status := manager.LifecycleStatus(); status.State != configkit.LifecycleStateFailed {
+				t.Fatalf("manager state = %q, want %q", status.State, configkit.LifecycleStateFailed)
+			}
+			if attempts := manager.Attempts(); len(attempts) != 1 || attempts[0].Failure == nil || attempts[0].Failure.Code != configkit.FailureCodeMissingSource {
+				t.Fatalf("manager attempts = %+v, want one missing-source failure", attempts)
+			}
+		})
+	}
+}
+
+func TestManagerLoadFromTypedNilSourcePreservesLastKnownGood(t *testing.T) {
+	manager := configkit.NewManager[stepsTestConfig]()
+	validSource := configkit.NewBytesSource(
+		[]byte(`{"name":"api","enabled":true,"port":8080}`),
+		configkit.SourceMetadata{Name: "memory", Kind: "memory"},
+		"rev-1",
+	)
+	if _, err := manager.LoadFromSource(context.Background(), configkit.AttemptKindInitialLoad, validSource, testPipeline()); err != nil {
+		t.Fatalf("initial load: %v", err)
+	}
+
+	var source *typedNilTestSource
+	result, err := manager.LoadFromSource(context.Background(), configkit.AttemptKindReload, source, testPipeline())
 	if !errors.Is(err, configkit.ErrMissingSource) {
-		t.Fatalf("load from missing source error = %v, want configkit.ErrMissingSource", err)
+		t.Fatalf("reload missing source error = %v, want configkit.ErrMissingSource", err)
 	}
-	if result.Load.Attempt.ID == 0 {
-		t.Fatal("load attempt id = 0, want manager-assigned id")
+	if result.Load.Attempt.Failure == nil || result.Load.Attempt.Failure.Code != configkit.FailureCodeMissingSource {
+		t.Fatalf("reload failure = %+v, want missing source", result.Load.Attempt.Failure)
 	}
-	if result.Load.Attempt.Status != configkit.AttemptStatusFailed {
-		t.Fatalf("attempt status = %q, want %q", result.Load.Attempt.Status, configkit.AttemptStatusFailed)
+	status := manager.LifecycleStatus()
+	if status.State != configkit.LifecycleStateDegraded || status.Current == nil || status.Current.Revision != "rev-1" {
+		t.Fatalf("manager status = %+v, want degraded with current rev-1", status)
 	}
-	if result.Apply.Published {
-		t.Fatal("published = true, want false")
-	}
-	if status := manager.LifecycleStatus(); status.State != configkit.LifecycleStateFailed {
-		t.Fatalf("manager state = %q, want %q", status.State, configkit.LifecycleStateFailed)
+	if attempts := manager.Attempts(); len(attempts) != 2 {
+		t.Fatalf("manager attempts = %d, want initial load and failed reload", len(attempts))
 	}
 }
 

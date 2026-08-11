@@ -222,6 +222,33 @@ func TestLoadReturnsStageFailures(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsEmptyChecksum(t *testing.T) {
+	pipeline := testPipeline()
+	pipeline.Checksum = func(context.Context, stepsTestConfig) (string, error) {
+		return "", nil
+	}
+
+	result, err := configkit.Load(context.Background(), configkit.AttemptKindReload, configkit.SourceData{
+		Data: []byte(`{"name":"api","enabled":true,"port":8080}`),
+	}, pipeline)
+	if err == nil || !strings.Contains(err.Error(), "checksummer returned an empty checksum") {
+		t.Fatalf("load error = %v, want private empty-checksum contract failure", err)
+	}
+	assertFailedAttempt(t, result, configkit.AttemptStageChecksum)
+	if result.Snapshot != nil {
+		t.Fatalf("snapshot = %+v, want nil", result.Snapshot)
+	}
+	if result.Attempt.Failure.Code != configkit.FailureCodeChecksumFailed {
+		t.Fatalf("failure code = %q, want %q", result.Attempt.Failure.Code, configkit.FailureCodeChecksumFailed)
+	}
+	if result.Attempt.Failure.Message != "config checksum failed" {
+		t.Fatalf("failure message = %q, want %q", result.Attempt.Failure.Message, "config checksum failed")
+	}
+	if strings.Contains(result.Attempt.Failure.Message, "empty") {
+		t.Fatalf("public failure exposed private contract detail: %+v", result.Attempt.Failure)
+	}
+}
+
 func TestLoadRecoversPipelinePanic(t *testing.T) {
 	panicErr := errors.New("boom")
 	pipeline := testPipeline()
@@ -291,11 +318,30 @@ func TestLoadFromSourcePreservesSourceDataMetadata(t *testing.T) {
 }
 
 func TestLoadFromSourceMissingSource(t *testing.T) {
-	result, err := configkit.LoadFromSource(context.Background(), configkit.AttemptKindReload, nil, testPipeline())
-	if !errors.Is(err, configkit.ErrMissingSource) {
-		t.Fatalf("load missing source error = %v, want configkit.ErrMissingSource", err)
+	var typedNil *typedNilTestSource
+	tests := []struct {
+		name   string
+		source configkit.Source
+	}{
+		{name: "nil"},
+		{name: "typed nil", source: typedNil},
 	}
-	assertFailedAttempt(t, result, configkit.AttemptStageSourceRead)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := configkit.LoadFromSource(context.Background(), configkit.AttemptKindReload, tt.source, testPipeline())
+			if !errors.Is(err, configkit.ErrMissingSource) {
+				t.Fatalf("load missing source error = %v, want configkit.ErrMissingSource", err)
+			}
+			if errors.Is(err, configkit.ErrLifecyclePanicked) {
+				t.Fatalf("load missing source error = %v, must not be a recovered lifecycle panic", err)
+			}
+			assertFailedAttempt(t, result, configkit.AttemptStageSourceRead)
+			if result.Attempt.Failure.Code != configkit.FailureCodeMissingSource {
+				t.Fatalf("attempt failure = %+v, want missing source", result.Attempt.Failure)
+			}
+		})
+	}
 }
 
 func TestLoadFromSourceReadError(t *testing.T) {
@@ -366,6 +412,16 @@ type fakeSource struct {
 	readErr       error
 	panicMetadata bool
 	panicRead     bool
+}
+
+type typedNilTestSource struct{}
+
+func (*typedNilTestSource) Metadata() configkit.SourceMetadata {
+	panic("typed-nil source metadata must not be called")
+}
+
+func (*typedNilTestSource) Read(context.Context) (configkit.SourceData, error) {
+	panic("typed-nil source read must not be called")
 }
 
 func (s fakeSource) Metadata() configkit.SourceMetadata {

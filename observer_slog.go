@@ -8,10 +8,11 @@ import (
 // SlogObserver returns an Observer that logs lifecycle events with slog.
 //
 // If logger is nil, slog.Default is used. The observer logs lifecycle metadata
-// only; it does not log typed configuration values or redacted fields. It may
-// log caller-provided source names, revisions, checksums, and public failure
-// detail, so those values should be safe for the logger's audience. Arbitrary
-// internal error strings are not copied into events.
+// only, including component identity and event-time manager state; it does not
+// log typed configuration values or redacted fields. It may log caller-provided
+// source names, revisions, checksums, and public failure detail, so those values
+// should be safe for the logger's audience. Arbitrary internal error strings
+// are not copied into events.
 func SlogObserver(logger *slog.Logger) Observer {
 	if logger == nil {
 		logger = slog.Default()
@@ -30,6 +31,12 @@ func SlogObserver(logger *slog.Logger) Observer {
 func slogEventAttrs(event Event) []slog.Attr {
 	attrs := []slog.Attr{
 		slog.String("event", string(event.Kind)),
+	}
+	if event.ComponentName != "" {
+		attrs = append(attrs, slog.String("component_name", event.ComponentName))
+	}
+	if event.ManagerState != "" {
+		attrs = append(attrs, slog.String("manager_state", string(event.ManagerState)))
 	}
 
 	attemptID := event.AttemptID
@@ -66,6 +73,9 @@ func appendSlogAttemptAttrs(attrs []slog.Attr, attempt *AttemptRecord) []slog.At
 
 	if attempt.Checksum != "" {
 		attrs = append(attrs, slog.String("attempt_checksum", attempt.Checksum))
+	}
+	if attempt.Status != "" {
+		attrs = append(attrs, slog.String("attempt_status", string(attempt.Status)))
 	}
 	if attempt.Stage != "" {
 		attrs = append(attrs, slog.String("attempt_stage", string(attempt.Stage)))

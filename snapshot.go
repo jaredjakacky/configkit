@@ -2,11 +2,13 @@ package configkit
 
 import "time"
 
-// Snapshot is one successfully loaded, validated, and published configuration value.
+// Snapshot is one successfully loaded, validated, and publishable configuration value.
 //
-// A snapshot represents last-known-good configuration state. Failed load or reload
-// attempts should be recorded outside the snapshot, because a Snapshot should only
-// represent configuration that was valid enough to publish.
+// Package-level Load and LoadFromSource can produce a Snapshot before a Manager
+// publishes it. Once published, the snapshot represents last-known-good
+// configuration state. Failed load or reload attempts should be recorded outside
+// the snapshot because a Snapshot should only represent configuration that was
+// valid enough to publish.
 //
 // Snapshot protects its metadata and redacted map container from mutation.
 // Pipeline.Copy can protect the stored value from references shared with earlier
@@ -21,8 +23,8 @@ type Snapshot[T any] struct {
 	redacted RedactedView
 }
 
-// SnapshotMetadata describes where a configuration snapshot came from and when it
-// became active.
+// SnapshotMetadata describes where a configuration snapshot came from and when
+// its load lifecycle completed.
 type SnapshotMetadata struct {
 	// Source describes the logical source that produced the snapshot.
 	Source SourceMetadata `json:"source"`
@@ -33,12 +35,14 @@ type SnapshotMetadata struct {
 	// path, or environment details.
 	Revision string `json:"revision,omitempty"`
 
-	// Checksum is a stable fingerprint of the effective configuration value. It
-	// is operational metadata, not a redaction or secrecy mechanism. Exposed
-	// checksums can leak information for low-entropy values or known config sets.
+	// Checksum is a non-empty stable fingerprint of the effective configuration
+	// value. It is operational metadata, not a redaction or secrecy mechanism.
+	// Exposed checksums can leak information for low-entropy values or known
+	// config sets.
 	Checksum string `json:"checksum"`
 
-	// LoadedAt is when this snapshot was successfully loaded and published.
+	// LoadedAt is when the load lifecycle successfully produced this snapshot.
+	// Manager application and publication may occur later.
 	LoadedAt time.Time `json:"loaded_at"`
 }
 
@@ -50,12 +54,14 @@ type SnapshotMetadata struct {
 // application's Redactor.
 type RedactedView map[string]any
 
-// NewSnapshot creates a configuration snapshot from an already-loaded
-// configuration value, its metadata, and a safe redacted inspection view.
+// NewSnapshot creates a publishable configuration snapshot from an
+// already-loaded configuration value, its metadata, and a safe redacted
+// inspection view.
 //
-// NewSnapshot does not load, decode, validate, redact, or compute metadata.
-// Those steps happen before a snapshot is created. A Snapshot represents the
-// published result of that work.
+// NewSnapshot does not load, decode, validate, redact, compute, or validate
+// metadata. Those steps happen before a snapshot is created. Manager.Apply
+// rejects a successful LoadResult whose snapshot checksum is empty before
+// publication.
 func NewSnapshot[T any](value T, metadata SnapshotMetadata, redacted RedactedView) Snapshot[T] {
 	return Snapshot[T]{
 		value:    value,

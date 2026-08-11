@@ -135,8 +135,10 @@ func EmptyRedactor[T any]() Redactor[T] {
 // canonicalization, field exclusion, secret handling, source-provided versions,
 // or a checksum format that matches existing operational tooling. Checksums are
 // operational fingerprints, not redaction or secrecy mechanisms; avoid exposed
-// checksums for low-entropy or secret-bearing config values. Configkit calls
-// Checksummer with a non-nil context, and direct callers must do the same.
+// checksums for low-entropy or secret-bearing config values. A Checksummer that
+// returns a nil error must return a non-empty checksum; Configkit does not
+// otherwise prescribe its format. Configkit calls Checksummer with a non-nil
+// context, and direct callers must do the same.
 type Checksummer[T any] func(ctx context.Context, value T) (string, error)
 
 // SHA256JSONChecksum returns a Checksummer that computes a hex-encoded SHA-256

@@ -16,9 +16,10 @@ reload := configkit.ReloadCommand(manager, source, pipeline)
 single command descriptor is named `config/reload`.
 
 The handler reports ready status when its manager and source are present and
-`Pipeline.Validate` accepts its required steps. Missing static configuration is
-reported as not ready and causes command rejection without recording a manager
-load attempt. Status does not read the source or mirror manager lifecycle state.
+`Pipeline.Validate` accepts its required steps. Nil and typed-nil `Source`
+values are both missing static configuration: status is not ready and commands
+are rejected without recording a manager load attempt. Status does not read the
+source or mirror manager lifecycle state.
 
 Register the handler with Opskit when the service needs command discovery or
 component inspection:

@@ -104,8 +104,7 @@ const (
 
 // AttemptStage describes the lifecycle stage associated with a failed attempt.
 //
-// Successful attempts usually leave Stage empty because the full lifecycle
-// completed.
+// Successful attempts leave Stage empty because the full lifecycle completed.
 type AttemptStage string
 
 const (
@@ -122,10 +121,12 @@ const (
 
 // AttemptRecord describes one configuration load or reload attempt.
 //
-// Failed attempts do not produce a new Snapshot. A manager can keep the last
-// known good Snapshot active while recording the failed attempt separately. ID
-// is assigned by a Manager when the attempt is applied; package-level Load and
-// LoadFromSource may leave it zero.
+// Successful attempts have no Stage or Failure and carry the non-empty checksum
+// of their Snapshot. Failed attempts have a Stage and safe public Failure, do
+// not carry a checksum, and do not produce a new Snapshot. A manager can keep
+// the last known good Snapshot active while recording the failed attempt
+// separately. ID is assigned by a Manager when the attempt is applied;
+// package-level Load and LoadFromSource may leave it zero.
 type AttemptRecord struct {
 	ID     uint64        `json:"id,omitempty"`
 	Kind   AttemptKind   `json:"kind,omitempty"`

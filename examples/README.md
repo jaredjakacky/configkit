@@ -19,7 +19,7 @@ Read the examples in the order listed below. Each one builds on the last. By the
 
 **[01-basic-json](01-basic-json)** — The smallest useful Configkit program. Raw JSON bytes become a typed, validated, checksummed snapshot owned by a manager. This is Configkit before files, reloads, HTTP, workers, or telemetry enter the picture.
 
-**[02-file-source](02-file-source)** — Loading configuration from a local JSON file. This example focuses on `FileSource`, safe source metadata, source revisions, snapshot checksums, and `loaded_at` metadata.
+**[02-file-source](02-file-source)** — Loading configuration from a local JSON file. This example focuses on `FileSource`, safe source metadata, source revisions, snapshot checksums, and snapshot load-completion (`loaded_at`) metadata.
 
 **[03-redaction-inspection](03-redaction-inspection)** — Typed config can contain sensitive fields, but operational inspection should not. This example shows an application-owned `Redactor` and `Manager.LifecycleInspection()` returning only a safe `RedactedView`.
 

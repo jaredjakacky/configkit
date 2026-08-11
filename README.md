@@ -227,7 +227,8 @@ systems part of the root package.
 `Pipeline[T]` turns raw source data into a publishable typed snapshot. `Decode`,
 `Redact`, and `Checksum` are required. Defaults, validation, and copy are
 optional. The application owns those functions because it owns the config type
-and its meaning.
+and its meaning. A successful Checksummer must return a non-empty fingerprint;
+Configkit does not otherwise prescribe its format.
 
 `JSONDecoder[T]` is the production-oriented JSON default. It rejects unknown
 fields at ordinary Go struct boundaries and requires exactly one JSON value,
@@ -251,7 +252,10 @@ composition seams for application code and operational adapters.
 
 Observers receive `load_started`, `load_succeeded`, `load_failed`, and
 `snapshot_applied` events for logs, telemetry, diagnostics, and lightweight
-operational hooks.
+operational hooks. Manager-emitted events include the normalized Opskit
+component name and manager state at the event boundary. Together,
+`ComponentName` and the manager-local `AttemptID` correlate attempts when
+multiple managers share an observer.
 
 ## Mutability Contract
 
@@ -407,9 +411,9 @@ results.
 
 A handler missing its manager, source, or required pipeline steps reports
 not-ready status and rejects commands without recording a Configkit load
-attempt. Handler usability, command outcome, and manager readiness are separate:
-a failed command can leave the manager degraded but ready while it serves a
-last-known-good snapshot.
+attempt. Nil and typed-nil `Source` values are both missing. Handler usability,
+command outcome, and manager readiness are separate: a failed command can leave
+the manager degraded but ready while it serves a last-known-good snapshot.
 
 The successful result payload is `configkit.ReloadCommandResult`. It does not
 include typed config values or redacted inspection output. It may include
@@ -468,13 +472,21 @@ manager := configkit.NewManager[AppConfig](
 )
 ```
 
-`SlogObserver` logs lifecycle metadata such as event kind, attempt ID, source metadata, attempt status, failure stage, checksum, duration, and apply result. It does not log typed config values or redacted fields.
+`SlogObserver` logs lifecycle metadata such as event kind, component name,
+manager state, attempt ID, source metadata, attempt status, failure stage,
+checksum, duration, and apply result. It does not log typed config values or
+redacted fields.
 
 Observers run synchronously by default and should return quickly. A synchronous
 observer must not call `Load`, `LoadFromSource`, or `Apply` on the same manager
 that emitted the event, because that creates reentrant lifecycle behavior and
 can deadlock. Read-only calls such as `LifecycleStatus`, `LifecycleInspection`, `Snapshot`, and
 `Value` are acceptable.
+
+Manager state is updated before `load_succeeded` or `load_failed` is delivered,
+so synchronous completion observers see state consistent with the event. A
+completion event includes the resulting `ApplyResult`; failed reloads therefore
+show the retained last-known-good snapshot without exposing its typed value.
 
 Use `AsyncObserver` when an observer may block:
 
@@ -490,7 +502,9 @@ manager := configkit.NewManager[AppConfig](
 `AsyncObserver` delivers events on a background goroutine. It does not block
 loads or applies. If its queue is full or closed, it drops events and counts
 them with `Dropped()`. Use it, or hand work off to another goroutine, for
-follow-up work that may block or trigger more lifecycle operations.
+follow-up work that may block or trigger more lifecycle operations. Event
+fields are the authoritative event-time view; a live manager read during later
+async delivery may observe a newer attempt.
 
 The optional OpenTelemetry package provides metrics and retrospective lifecycle
 spans from emitted Configkit events. It does not wrap source reads or pipeline
@@ -606,11 +620,27 @@ command:
 make release-check
 ```
 
-After that succeeds, create and push a stable `v0.x.y` or `v1.x.y` tag. The
-release workflow validates that the tag has the expected Go module version form
-and points to a commit on the `main` release line. It then independently reruns
-`verify`, `test-race`, and `govulncheck` on every supported Go version before
-publishing the GitHub Release.
+`release-check` requires network access and fails unless:
+
+- the checkout is attached to `main`
+- the working tree has no staged, unstaged, or non-ignored untracked files
+- `origin/main` can be refreshed
+- `HEAD` exactly matches the refreshed `origin/main`
+
+The command validates that commit in a temporary detached Git worktree with Go
+workspace discovery disabled. Local ignored files, caches, and parent
+`go.work` files therefore cannot alter the tree under test. It runs `verify`,
+`test-race`, and `govulncheck`, checks that validation did not modify the
+detached worktree, and then repeats the branch, cleanliness, and remote-tip
+checks in the original checkout.
+
+After the command succeeds, create and push a stable `v0.x.y` or `v1.x.y` tag
+without changing the checkout. If `main` advances or local state changes before
+tagging, rerun `make release-check`. The release workflow validates that the tag
+has the expected Go module version form and points to a commit on the `main`
+release line. It then independently reruns `verify`, `test-race`, and
+`govulncheck` on every supported Go version before publishing the GitHub
+Release.
 
 ## Issues and Scope
 

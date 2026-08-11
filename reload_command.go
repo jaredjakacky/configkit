@@ -76,8 +76,8 @@ type ReloadCommandHandler[T any] struct {
 // reloads return completed Opskit command results. Admitted reload failures
 // return failed command results with explicit safe public failure detail while
 // the manager independently preserves any last-known-good snapshot. A handler
-// missing its manager, source, or required pipeline steps rejects the command
-// without recording a load attempt.
+// missing its manager, a nil or typed-nil source, or required pipeline steps
+// rejects the command without recording a load attempt.
 func ReloadCommand[T any](manager *Manager[T], source Source, pipeline Pipeline[T], opts ...ReloadCommandOption) *ReloadCommandHandler[T] {
 	options := defaultReloadCommandOptions()
 	for _, opt := range opts {
@@ -266,7 +266,7 @@ func (h *ReloadCommandHandler[T]) configurationFailure() *reloadCommandConfigura
 			message: "config reload command handler is missing manager",
 		}
 	}
-	if h.source == nil {
+	if isNilSource(h.source) {
 		return &reloadCommandConfigurationFailure{
 			message: "config reload command handler is missing source",
 			failure: newFailure(FailureCodeMissingSource, "config source is missing"),

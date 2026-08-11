@@ -98,6 +98,55 @@ func TestAsyncObserverDetachesQueuedFailureFromCaller(t *testing.T) {
 	}
 }
 
+func TestAsyncObserverRetainsEventTimeManagerState(t *testing.T) {
+	release := make(chan struct{})
+	released := false
+	received := make(chan configkit.Event, 1)
+	async := configkit.NewAsyncObserver(func(_ context.Context, event configkit.Event) {
+		<-release
+		if event.Kind == configkit.EventKindLoadSucceeded {
+			received <- event
+		}
+	})
+	defer closeAsyncObserver(t, async)
+	defer func() {
+		if !released {
+			close(release)
+		}
+	}()
+	manager := configkit.NewManager[stepsTestConfig](
+		configkit.WithIdentity("async-config"),
+		configkit.WithObservers(async.Observer()),
+	)
+
+	if _, err := manager.Load(context.Background(), configkit.AttemptKindInitialLoad, configkit.SourceData{
+		Data: []byte(`{"name":"api","enabled":true,"port":8080}`),
+	}, testPipeline()); err != nil {
+		t.Fatalf("initial load: %v", err)
+	}
+	if _, err := manager.Load(context.Background(), configkit.AttemptKindReload, configkit.SourceData{
+		Data: []byte(`{"name":`),
+	}, testPipeline()); err == nil {
+		t.Fatal("reload error = nil, want decode failure")
+	}
+	if state := manager.LifecycleStatus().State; state != configkit.LifecycleStateDegraded {
+		t.Fatalf("current manager state = %q, want degraded", state)
+	}
+
+	close(release)
+	released = true
+	event := receiveAsyncEvent(t, received)
+	if event.ComponentName != "async-config" {
+		t.Fatalf("event component name = %q, want async-config", event.ComponentName)
+	}
+	if event.ManagerState != configkit.LifecycleStateLoaded {
+		t.Fatalf("event-time manager state = %q, want loaded", event.ManagerState)
+	}
+	if event.Apply == nil || !event.Apply.Published {
+		t.Fatalf("event apply = %+v, want published initial snapshot", event.Apply)
+	}
+}
+
 func TestAsyncObserverDropsWhenBufferFull(t *testing.T) {
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})

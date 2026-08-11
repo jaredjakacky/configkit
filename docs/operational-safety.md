@@ -104,12 +104,16 @@ api_key "abc123" is invalid
 ## Logs and Observers
 
 `SlogObserver` logs lifecycle metadata, not typed config values or redacted
-fields. It can log source metadata, revisions, checksums, attempt stages,
-durations, and stage-specific public failure detail.
+fields. It can log component names, manager state, source metadata, revisions,
+checksums, attempt status and stages, durations, apply results, and
+stage-specific public failure detail. Opskit component descriptions and labels
+are not copied into lifecycle events.
 
 `AsyncObserver` changes delivery behavior only. It does not sanitize event
 data, but it does clone queued event records and nested failure detail so later
-caller mutation cannot change the delivered event.
+caller mutation cannot change the delivered event. Event fields are the
+authoritative event-time view; live manager reads during delayed delivery may
+observe newer state.
 
 Custom observers should follow the same rule: events are operational data, not
 typed config exposure.
@@ -121,6 +125,9 @@ redacted config data, and typed config values.
 
 Default attributes are low-cardinality. `WithSourceName` is opt-in because
 source names may increase cardinality and may expose caller-provided metadata.
+Component names and finite manager lifecycle states are included by default.
+Manager-local attempt IDs are included on spans but omitted from metrics to
+avoid unbounded metric cardinality.
 
 Public failure messages may be recorded on failed spans. Arbitrary returned
 error strings are not recorded.
@@ -132,6 +139,11 @@ attributes are intentionally low-cardinality and do not include source names,
 revisions, checksums, errors, file paths, tenant IDs, or redacted config
 values. Opskit inspection can include lifecycle summaries, retained attempts,
 last apply results, and redacted config values chosen by the application.
+
+Snapshot `LoadedAt` is the stateless load-completion time. ApplyResult
+`AppliedAt` is the later manager mutation time and is used for Opskit
+`Status.UpdatedAt` when available. Both are operational timestamps and reveal
+when configuration work and state changes occurred.
 
 `configkit/opshttp` exposes read-only operational state through Servekit.
 

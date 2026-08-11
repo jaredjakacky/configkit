@@ -66,7 +66,8 @@ configuration into a framework.
 
 - `Pipeline[T].Checksum`
 
-  Required checksum step.
+  Required checksum step. A nil error must be accompanied by a non-empty
+  checksum string.
 
 - `Pipeline[T].ApplyDefaults`
 
@@ -191,7 +192,7 @@ configuration into a framework.
 
 - `ErrMissingSource`
 
-  Returned when `LoadFromSource` is called without a source.
+  Returned when `LoadFromSource` is called with a nil or typed-nil source.
 
 - `BytesSource`
 
@@ -270,6 +271,8 @@ configuration into a framework.
 - `Checksummer[T]`
 
   Computes a stable operational fingerprint for the effective configuration.
+  Successful output must be non-empty. Configkit does not otherwise prescribe
+  its format.
 
   Shape: `func(context.Context, T) (string, error)`
 
@@ -299,6 +302,8 @@ configuration into a framework.
 - `NewSnapshot[T](value, metadata, redacted)`
 
   Creates a snapshot from an already-loaded value, metadata, and redacted view.
+  It does not validate metadata; `Manager.Apply` rejects an empty checksum
+  before publishing a successful externally constructed result.
 
 - `Snapshot.Value()`
 
@@ -314,7 +319,7 @@ configuration into a framework.
 
 - `SnapshotMetadata`
 
-  Operational metadata for a published snapshot.
+  Operational metadata for a successfully loaded, publishable snapshot.
 
 - `SnapshotMetadata.Source`
 
@@ -327,11 +332,13 @@ configuration into a framework.
 
 - `SnapshotMetadata.Checksum`
 
-  Stable fingerprint of the effective configuration value.
+  Non-empty stable fingerprint of the effective configuration value for a
+  published snapshot.
 
 - `SnapshotMetadata.LoadedAt`
 
-  Time when the snapshot was successfully loaded and published.
+  Time when the stateless load lifecycle successfully produced the snapshot.
+  Manager application and publication may occur later.
 
 - `RedactedView`
 
@@ -392,6 +399,10 @@ configuration into a framework.
   Applies an externally produced `LoadResult`. Successful results publish the
   snapshot. Failed results preserve the current snapshot. Invalid results return
   an error wrapping `ErrInvalidLoadResult` and do not mutate manager state.
+  Successful results require matching source and revision, matching non-empty
+  attempt and snapshot checksums, and no failure stage or detail. Failed results
+  require no snapshot or checksum and a non-empty stage plus non-zero safe
+  public failure detail.
   Apply emits `snapshot_applied` when it publishes a snapshot, but it does not
   emit load lifecycle events because it did not perform the load. Cancellation
   before serialized lifecycle admission returns the context error without
@@ -436,7 +447,8 @@ configuration into a framework.
 
 - `ErrInvalidLoadResult`
 
-  Returned when `Manager.Apply` receives a malformed `LoadResult`.
+  Returned when `Manager.Apply` receives a malformed `LoadResult`, including a
+  successful snapshot with an empty checksum.
 
 ### Status and inspection
 
@@ -605,7 +617,7 @@ configuration into a framework.
 
 - `AttemptRecord.Stage`
 
-  Failed lifecycle stage. Successful attempts usually leave this empty.
+  Failed lifecycle stage. Successful attempts leave this empty.
 
 - `AttemptRecord.Source`
 
@@ -653,6 +665,12 @@ configuration into a framework.
 
   Snapshot metadata that is current after apply, if any.
 
+- `ApplyResult.AppliedAt`
+
+  UTC time when the manager accepted the structurally valid result and
+  committed its lifecycle-state mutation. It is set for successful publication
+  and for accepted failed results.
+
 ### Observability
 
 - `EventKind`
@@ -685,9 +703,20 @@ configuration into a framework.
 
   Lifecycle event kind.
 
+- `Event.ComponentName`
+
+  Normalized Opskit component name for manager-emitted events. Combine it with
+  `AttemptID` to correlate attempts when multiple managers share observers.
+
+- `Event.ManagerState`
+
+  Manager lifecycle state at the event boundary. Completion events carry the
+  resulting post-application state; `load_started` carries pre-attempt state.
+
 - `Event.AttemptID`
 
-  Manager-local attempt identifier when available.
+  Manager-local attempt identifier when available. It is not unique without
+  the event's component name.
 
 - `Event.AttemptKind`
 
@@ -711,7 +740,9 @@ configuration into a framework.
 
 - `Event.Apply`
 
-  Apply result associated with snapshot application events.
+  Apply result associated with load completion and snapshot application events.
+  Failed completion events use it to show that publication did not occur and
+  that any last-known-good snapshot remains current.
 
 - `Event.OccurredAt`
 
@@ -723,6 +754,10 @@ configuration into a framework.
   must not call `Load`, `LoadFromSource`, or `Apply` on the same manager. Use
   `AsyncObserver` or another goroutine for follow-up work that may block or
   trigger lifecycle operations.
+
+  Synchronous observers see manager state consistent with the event boundary.
+  Async observers should treat Event fields as authoritative event-time data
+  because a later live manager read may observe a newer attempt.
 
   Shape: `func(context.Context, Event)`
 
@@ -883,8 +918,9 @@ root module. See the README's
   Successful reloads return completed Opskit command results. Admitted reload
   failures, including context cancellation and deadline expiration, return
   failed command results with safe top-level failure detail and no result
-  payload. Missing manager, source, or required pipeline steps make handler
-  status not ready and reject commands without recording a load attempt.
+  payload. Missing manager, nil or typed-nil source, or required pipeline steps
+  make handler status not ready and reject commands without recording a load
+  attempt.
 
   Handler status describes static command usability only. It does not read the
   source or mirror manager lifecycle and readiness state.
@@ -992,12 +1028,18 @@ functions may create their own spans when they need execution-level tracing.
 Default attributes are intentionally low-cardinality:
 
 - `configkit.event`
+- `configkit.component.name`
+- `configkit.manager.state`
 - `configkit.attempt.kind`
 - `configkit.attempt.status`
 - `configkit.attempt.stage`
 - `configkit.failure.code` (failed attempts only)
 - `configkit.source.kind`
+- `configkit.apply.published`
 - `configkit.apply.changed`
+
+Spans also include the manager-local `configkit.attempt.id` correlation
+attribute. Attempt IDs are excluded from metrics because they are unbounded.
 
 The observer does not record revisions, checksums, raw config data, redacted
 config data, or typed config values. Source kind, optional source name, attempt

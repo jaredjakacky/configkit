@@ -64,6 +64,7 @@ Built-in sources:
 Custom sources can read from environment-derived data, remote APIs, databases,
 Kubernetes, Consul, SSM, Vault, or any other backend. Keep source metadata safe:
 it can appear in logs, status, inspection, telemetry, and adapter output.
+Configkit treats both nil and typed-nil `Source` values as missing sources.
 
 ## Pipeline
 
@@ -214,6 +215,12 @@ Observers receive lifecycle events:
 
 Use `SlogObserver` for structured logs, `AsyncObserver` when delivery should
 not block loads, and `otel.NewObserver` for OpenTelemetry.
+
+Manager-emitted events include `ComponentName` and event-time `ManagerState`.
+Attempt IDs are manager-local, so shared observers correlate them with the
+component name. Manager state is updated before synchronous load completion
+observers run. Async observers should use Event fields for event-time state
+because later manager reads may observe a newer attempt.
 
 ## Integrations
 

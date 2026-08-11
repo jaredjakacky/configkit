@@ -89,11 +89,14 @@ func TestObserverRecordsLoadAndApplySpans(t *testing.T) {
 
 	loadEvent := otelTestEvent(configkit.EventKindLoadFailed)
 	applyEvent := configkit.Event{
-		Kind:       configkit.EventKindSnapshotApplied,
-		Source:     loadEvent.Source,
-		Snapshot:   loadEvent.Snapshot,
-		Apply:      &configkit.ApplyResult{Published: true, Changed: true},
-		OccurredAt: loadEvent.OccurredAt,
+		Kind:          configkit.EventKindSnapshotApplied,
+		ComponentName: loadEvent.ComponentName,
+		ManagerState:  configkit.LifecycleStateLoaded,
+		AttemptID:     loadEvent.AttemptID,
+		Source:        loadEvent.Source,
+		Snapshot:      loadEvent.Snapshot,
+		Apply:         &configkit.ApplyResult{Published: true, Changed: true},
+		OccurredAt:    loadEvent.OccurredAt,
 	}
 	observer(context.Background(), loadEvent)
 	observer(context.Background(), applyEvent)
@@ -114,6 +117,9 @@ func TestObserverRecordsLoadAndApplySpans(t *testing.T) {
 	}
 	assertOtelAttrs(t, loadSpan.Attributes(), map[string]string{
 		"configkit.event":          string(configkit.EventKindLoadFailed),
+		"configkit.component.name": "payments-config",
+		"configkit.manager.state":  string(configkit.LifecycleStateDegraded),
+		"configkit.attempt.id":     "1",
 		"configkit.attempt.kind":   string(configkit.AttemptKindReload),
 		"configkit.attempt.status": string(configkit.AttemptStatusFailed),
 		"configkit.attempt.stage":  string(configkit.AttemptStageDecode),
@@ -121,6 +127,8 @@ func TestObserverRecordsLoadAndApplySpans(t *testing.T) {
 		"configkit.source.kind":    "memory",
 		"configkit.source.name":    "config-source",
 	})
+	assertOtelBoolAttr(t, loadSpan.Attributes(), "configkit.apply.published", false)
+	assertOtelBoolAttr(t, loadSpan.Attributes(), "configkit.apply.changed", false)
 	assertOtelAttrsOmit(t, loadSpan.Attributes(), "configkit.revision", "configkit.checksum", "configkit.redacted")
 
 	applySpan := findSpan(t, spans, "configkit.apply")
@@ -133,6 +141,13 @@ func TestObserverRecordsLoadAndApplySpans(t *testing.T) {
 	if got := applySpan.EndTime(); !got.Equal(applyEvent.OccurredAt) {
 		t.Fatalf("apply span end = %v, want %v", got, applyEvent.OccurredAt)
 	}
+	assertOtelAttrs(t, applySpan.Attributes(), map[string]string{
+		"configkit.component.name": "payments-config",
+		"configkit.manager.state":  string(configkit.LifecycleStateLoaded),
+		"configkit.attempt.id":     "1",
+	})
+	assertOtelBoolAttr(t, applySpan.Attributes(), "configkit.apply.published", true)
+	assertOtelBoolAttr(t, applySpan.Attributes(), "configkit.apply.changed", true)
 }
 
 func TestObserverRecordsMetrics(t *testing.T) {
@@ -149,13 +164,22 @@ func TestObserverRecordsMetrics(t *testing.T) {
 	}
 
 	loadEvent := otelTestEvent(configkit.EventKindLoadFailed)
-	observer(context.Background(), configkit.Event{Kind: configkit.EventKindLoadStarted, Source: loadEvent.Source})
+	observer(context.Background(), configkit.Event{
+		Kind:          configkit.EventKindLoadStarted,
+		ComponentName: loadEvent.ComponentName,
+		ManagerState:  configkit.LifecycleStateLoaded,
+		AttemptID:     loadEvent.AttemptID,
+		Source:        loadEvent.Source,
+	})
 	observer(context.Background(), loadEvent)
 	observer(context.Background(), configkit.Event{
-		Kind:       configkit.EventKindSnapshotApplied,
-		Source:     loadEvent.Source,
-		Apply:      &configkit.ApplyResult{Published: true, Changed: true},
-		OccurredAt: loadEvent.OccurredAt,
+		Kind:          configkit.EventKindSnapshotApplied,
+		ComponentName: loadEvent.ComponentName,
+		ManagerState:  configkit.LifecycleStateLoaded,
+		AttemptID:     loadEvent.AttemptID,
+		Source:        loadEvent.Source,
+		Apply:         &configkit.ApplyResult{Published: true, Changed: true},
+		OccurredAt:    loadEvent.OccurredAt,
 	})
 
 	var metrics metricdata.ResourceMetrics
@@ -180,6 +204,13 @@ func TestObserverRecordsMetrics(t *testing.T) {
 	if got := histogramCount(t, metrics, "configkit.load.duration"); got != 1 {
 		t.Fatalf("load duration count = %d, want 1", got)
 	}
+	attrs := int64MetricAttrs(t, metrics, "configkit.load.completed")
+	assertOtelAttrs(t, attrs, map[string]string{
+		"configkit.component.name": "payments-config",
+		"configkit.manager.state":  string(configkit.LifecycleStateDegraded),
+	})
+	assertOtelBoolAttr(t, attrs, "configkit.apply.published", false)
+	assertOtelAttrsOmit(t, attrs, "configkit.attempt.id")
 }
 
 func TestObserverDoesNotExposeReturnedError(t *testing.T) {
@@ -247,16 +278,22 @@ func otelTestEvent(kind configkit.EventKind) configkit.Event {
 	startedAt := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
 	endedAt := startedAt.Add(time.Second)
 	status := configkit.AttemptStatusSucceeded
+	managerState := configkit.LifecycleStateLoaded
+	apply := &configkit.ApplyResult{Published: true, Changed: true}
 	if kind == configkit.EventKindLoadFailed {
 		status = configkit.AttemptStatusFailed
+		managerState = configkit.LifecycleStateDegraded
+		apply = &configkit.ApplyResult{Published: false, Changed: false}
 	}
 
 	return configkit.Event{
-		Kind:        kind,
-		AttemptID:   1,
-		AttemptKind: configkit.AttemptKindReload,
-		Source:      configkit.SourceMetadata{Name: "config-source", Kind: "memory"},
-		Revision:    "rev-1",
+		Kind:          kind,
+		ComponentName: "payments-config",
+		ManagerState:  managerState,
+		AttemptID:     1,
+		AttemptKind:   configkit.AttemptKindReload,
+		Source:        configkit.SourceMetadata{Name: "config-source", Kind: "memory"},
+		Revision:      "rev-1",
 		Attempt: &configkit.AttemptRecord{
 			ID:        1,
 			Kind:      configkit.AttemptKindReload,
@@ -275,6 +312,7 @@ func otelTestEvent(kind configkit.EventKind) configkit.Event {
 			Checksum: "sum-1",
 			LoadedAt: endedAt,
 		},
+		Apply:      apply,
 		OccurredAt: endedAt,
 	}
 }
@@ -317,6 +355,18 @@ func assertOtelAttrsOmit(t *testing.T, attrs []attribute.KeyValue, keys ...strin
 	}
 }
 
+func assertOtelBoolAttr(t *testing.T, attrs []attribute.KeyValue, key string, want bool) {
+	t.Helper()
+
+	got, ok := otelAttrsByKey(attrs)[key]
+	if !ok {
+		t.Fatalf("attribute %q missing", key)
+	}
+	if got.AsBool() != want {
+		t.Fatalf("attribute %q = %t, want %t", key, got.AsBool(), want)
+	}
+}
+
 func otelAttrsByKey(attrs []attribute.KeyValue) map[string]attribute.Value {
 	byKey := make(map[string]attribute.Value, len(attrs))
 	for _, attr := range attrs {
@@ -338,6 +388,20 @@ func int64MetricValue(t *testing.T, metrics metricdata.ResourceMetrics, name str
 		total += point.Value
 	}
 	return total
+}
+
+func int64MetricAttrs(t *testing.T, metrics metricdata.ResourceMetrics, name string) []attribute.KeyValue {
+	t.Helper()
+
+	metric := findMetric(t, metrics, name)
+	sum, ok := metric.Data.(metricdata.Sum[int64])
+	if !ok {
+		t.Fatalf("metric %q data type = %T, want int64 sum", name, metric.Data)
+	}
+	if len(sum.DataPoints) != 1 {
+		t.Fatalf("metric %q data point count = %d, want 1", name, len(sum.DataPoints))
+	}
+	return sum.DataPoints[0].Attributes.ToSlice()
 }
 
 func histogramCount(t *testing.T, metrics metricdata.ResourceMetrics, name string) uint64 {
