@@ -152,6 +152,10 @@ func TestStatusReturnsCopies(t *testing.T) {
 
 func succeededStatusTestResult(revision, checksum string) configkit.LoadResult[stepsTestConfig] {
 	loadedAt := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
+	return succeededStatusTestResultAt(revision, checksum, loadedAt)
+}
+
+func succeededStatusTestResultAt(revision, checksum string, loadedAt time.Time) configkit.LoadResult[stepsTestConfig] {
 	metadata := configkit.SnapshotMetadata{
 		Source:   configkit.SourceMetadata{Name: "test", Kind: "memory"},
 		Revision: revision,
@@ -176,6 +180,11 @@ func succeededStatusTestResult(revision, checksum string) configkit.LoadResult[s
 
 func failedStatusTestResult(message string) configkit.LoadResult[stepsTestConfig] {
 	startedAt := time.Date(2026, 5, 21, 12, 1, 0, 0, time.UTC)
+	return failedStatusTestResultAt(message, startedAt.Add(time.Second))
+}
+
+func failedStatusTestResultAt(message string, endedAt time.Time) configkit.LoadResult[stepsTestConfig] {
+	startedAt := endedAt.Add(-time.Second)
 
 	return configkit.LoadResult[stepsTestConfig]{
 		Attempt: configkit.AttemptRecord{
@@ -185,7 +194,7 @@ func failedStatusTestResult(message string) configkit.LoadResult[stepsTestConfig
 			Source:    configkit.SourceMetadata{Name: "test", Kind: "memory"},
 			Revision:  "v2",
 			StartedAt: startedAt,
-			EndedAt:   startedAt.Add(time.Second),
+			EndedAt:   endedAt,
 			Failure:   testFailure(message),
 		},
 	}

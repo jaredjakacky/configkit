@@ -32,11 +32,13 @@ func TestEventKindValues(t *testing.T) {
 
 func TestEventJSONUsesOperationalFieldNames(t *testing.T) {
 	event := configkit.Event{
-		Kind:        configkit.EventKindLoadFailed,
-		AttemptID:   7,
-		AttemptKind: configkit.AttemptKindReload,
-		Source:      configkit.SourceMetadata{Name: "memory", Kind: "memory"},
-		Revision:    "rev-1",
+		Kind:          configkit.EventKindLoadFailed,
+		ComponentName: "payments-config",
+		ManagerState:  configkit.LifecycleStateDegraded,
+		AttemptID:     7,
+		AttemptKind:   configkit.AttemptKindReload,
+		Source:        configkit.SourceMetadata{Name: "memory", Kind: "memory"},
+		Revision:      "rev-1",
 		Attempt: &configkit.AttemptRecord{
 			ID:      7,
 			Kind:    configkit.AttemptKindReload,
@@ -44,6 +46,7 @@ func TestEventJSONUsesOperationalFieldNames(t *testing.T) {
 			Stage:   configkit.AttemptStageDecode,
 			Failure: testFailure("decode failed"),
 		},
+		Apply:      &configkit.ApplyResult{Published: false},
 		OccurredAt: snapshotTestMetadata().LoadedAt,
 	}
 
@@ -57,7 +60,7 @@ func TestEventJSONUsesOperationalFieldNames(t *testing.T) {
 		t.Fatalf("unmarshal event JSON: %v", err)
 	}
 
-	for _, key := range []string{"kind", "attempt_id", "attempt_kind", "source", "revision", "attempt", "occurred_at"} {
+	for _, key := range []string{"kind", "component_name", "manager_state", "attempt_id", "attempt_kind", "source", "revision", "attempt", "apply", "occurred_at"} {
 		if _, ok := got[key]; !ok {
 			t.Fatalf("event JSON missing key %q in %s", key, data)
 		}
@@ -96,7 +99,8 @@ func TestManagerNotifiesSnapshotAppliedEvent(t *testing.T) {
 	})
 	manager := configkit.NewManager[stepsTestConfig](configkit.WithObservers(observer))
 
-	if _, err := manager.Apply(context.Background(), succeededStatusTestResult("v1", "sum-1")); err != nil {
+	apply, err := manager.Apply(context.Background(), succeededStatusTestResult("v1", "sum-1"))
+	if err != nil {
 		t.Fatalf("apply succeeded result: %v", err)
 	}
 
@@ -106,6 +110,12 @@ func TestManagerNotifiesSnapshotAppliedEvent(t *testing.T) {
 	event := events[0]
 	if event.Kind != configkit.EventKindSnapshotApplied {
 		t.Fatalf("event kind = %q, want %q", event.Kind, configkit.EventKindSnapshotApplied)
+	}
+	if event.ComponentName != "config" {
+		t.Fatalf("component name = %q, want config", event.ComponentName)
+	}
+	if event.ManagerState != configkit.LifecycleStateLoaded {
+		t.Fatalf("manager state = %q, want %q", event.ManagerState, configkit.LifecycleStateLoaded)
 	}
 	if event.AttemptID == 0 {
 		t.Fatal("attempt id = 0, want manager-assigned id")
@@ -118,6 +128,9 @@ func TestManagerNotifiesSnapshotAppliedEvent(t *testing.T) {
 	}
 	if event.Apply == nil || !event.Apply.Published {
 		t.Fatalf("event apply = %+v, want published apply result", event.Apply)
+	}
+	if !event.Apply.AppliedAt.Equal(apply.AppliedAt) {
+		t.Fatalf("event applied_at = %v, want returned applied_at %v", event.Apply.AppliedAt, apply.AppliedAt)
 	}
 	if event.OccurredAt.IsZero() {
 		t.Fatal("event occurred_at is zero")
@@ -213,12 +226,190 @@ func TestManagerNotifiesLoadLifecycleEvents(t *testing.T) {
 		t.Fatalf("third event kind = %q, want %q", events[2].Kind, configkit.EventKindSnapshotApplied)
 	}
 	for i, event := range events {
+		if event.ComponentName != "config" {
+			t.Fatalf("event %d component name = %q, want config", i, event.ComponentName)
+		}
 		if event.AttemptID == 0 {
 			t.Fatalf("event %d attempt id = 0, want manager-assigned id", i)
 		}
 		if event.AttemptID != events[0].AttemptID {
 			t.Fatalf("event %d attempt id = %d, want %d", i, event.AttemptID, events[0].AttemptID)
 		}
+	}
+	if events[0].ManagerState != configkit.LifecycleStateUnloaded {
+		t.Fatalf("started manager state = %q, want %q", events[0].ManagerState, configkit.LifecycleStateUnloaded)
+	}
+	for i := 1; i < len(events); i++ {
+		if events[i].ManagerState != configkit.LifecycleStateLoaded {
+			t.Fatalf("event %d manager state = %q, want %q", i, events[i].ManagerState, configkit.LifecycleStateLoaded)
+		}
+		if events[i].Apply == nil || !events[i].Apply.Published {
+			t.Fatalf("event %d apply = %+v, want published result", i, events[i].Apply)
+		}
+	}
+}
+
+func TestManagerEventsDistinguishManagerLocalAttemptIDs(t *testing.T) {
+	var events []configkit.Event
+	observer := configkit.Observer(func(_ context.Context, event configkit.Event) {
+		events = append(events, event)
+	})
+	first := configkit.NewManager[stepsTestConfig](
+		configkit.WithIdentity("primary-config"),
+		configkit.WithObservers(observer),
+	)
+	second := configkit.NewManager[stepsTestConfig](
+		configkit.WithIdentity("secondary-config"),
+		configkit.WithObservers(observer),
+	)
+
+	if _, err := first.Apply(context.Background(), succeededStatusTestResult("v1", "sum-1")); err != nil {
+		t.Fatalf("apply first manager: %v", err)
+	}
+	if _, err := second.Apply(context.Background(), succeededStatusTestResult("v1", "sum-1")); err != nil {
+		t.Fatalf("apply second manager: %v", err)
+	}
+
+	if len(events) != 2 {
+		t.Fatalf("event count = %d, want 2", len(events))
+	}
+	if events[0].AttemptID != 1 || events[1].AttemptID != 1 {
+		t.Fatalf("attempt ids = %d, %d; want manager-local id 1 for both", events[0].AttemptID, events[1].AttemptID)
+	}
+	if events[0].ComponentName != "primary-config" || events[1].ComponentName != "secondary-config" {
+		t.Fatalf("component names = %q, %q; want distinct configured identities", events[0].ComponentName, events[1].ComponentName)
+	}
+}
+
+func TestLoadSucceededObserverSeesResultingManagerState(t *testing.T) {
+	var manager *configkit.Manager[stepsTestConfig]
+	var observed bool
+	observer := configkit.Observer(func(_ context.Context, event configkit.Event) {
+		if event.Kind != configkit.EventKindLoadSucceeded {
+			return
+		}
+		observed = true
+		status := manager.LifecycleStatus()
+		if status.State != configkit.LifecycleStateLoaded || event.ManagerState != status.State {
+			t.Fatalf("event state = %q, manager state = %q; want loaded", event.ManagerState, status.State)
+		}
+		value, ok := manager.Value()
+		if !ok || value.Name != "api" {
+			t.Fatalf("manager value = %+v, ok = %t; want newly published config", value, ok)
+		}
+		if event.Apply == nil || !event.Apply.Published || event.Apply.Current == nil {
+			t.Fatalf("completion apply = %+v, want published current snapshot", event.Apply)
+		}
+	})
+	manager = configkit.NewManager[stepsTestConfig](configkit.WithObservers(observer))
+
+	if _, err := manager.Load(context.Background(), configkit.AttemptKindInitialLoad, configkit.SourceData{
+		Data: []byte(`{"name":"api","enabled":true,"port":8080}`),
+	}, testPipeline()); err != nil {
+		t.Fatalf("manager load: %v", err)
+	}
+	if !observed {
+		t.Fatal("load succeeded event not observed")
+	}
+}
+
+func TestLoadFromSourceSucceededObserverSeesResultingManagerState(t *testing.T) {
+	var manager *configkit.Manager[stepsTestConfig]
+	var observed bool
+	observer := configkit.Observer(func(_ context.Context, event configkit.Event) {
+		if event.Kind != configkit.EventKindLoadSucceeded {
+			return
+		}
+		observed = true
+		status := manager.LifecycleStatus()
+		if status.State != configkit.LifecycleStateLoaded || event.ManagerState != status.State {
+			t.Fatalf("event state = %q, manager state = %q; want loaded", event.ManagerState, status.State)
+		}
+		if event.Apply == nil || !event.Apply.Published {
+			t.Fatalf("completion apply = %+v, want published result", event.Apply)
+		}
+	})
+	manager = configkit.NewManager[stepsTestConfig](configkit.WithObservers(observer))
+	source := configkit.NewBytesSource(
+		[]byte(`{"name":"api","enabled":true,"port":8080}`),
+		configkit.SourceMetadata{Name: "memory", Kind: "memory"},
+		"rev-1",
+	)
+
+	if _, err := manager.LoadFromSource(context.Background(), configkit.AttemptKindInitialLoad, source, testPipeline()); err != nil {
+		t.Fatalf("manager load from source: %v", err)
+	}
+	if !observed {
+		t.Fatal("load succeeded event not observed")
+	}
+}
+
+func TestInitialLoadFailedObserverSeesFailedManagerState(t *testing.T) {
+	var manager *configkit.Manager[stepsTestConfig]
+	var observed bool
+	observer := configkit.Observer(func(_ context.Context, event configkit.Event) {
+		if event.Kind != configkit.EventKindLoadFailed {
+			return
+		}
+		observed = true
+		status := manager.LifecycleStatus()
+		if status.State != configkit.LifecycleStateFailed || event.ManagerState != status.State {
+			t.Fatalf("event state = %q, manager state = %q; want failed", event.ManagerState, status.State)
+		}
+		if status.LastFailure == nil || event.Apply == nil || event.Apply.Published {
+			t.Fatalf("status = %+v, apply = %+v; want recorded unpublished failure", status, event.Apply)
+		}
+		if _, ok := manager.Snapshot(); ok {
+			t.Fatal("snapshot available during initial failure completion")
+		}
+	})
+	manager = configkit.NewManager[stepsTestConfig](configkit.WithObservers(observer))
+
+	if _, err := manager.Load(context.Background(), configkit.AttemptKindInitialLoad, configkit.SourceData{
+		Data: []byte(`{"name":`),
+	}, testPipeline()); err == nil {
+		t.Fatal("manager load error = nil, want decode failure")
+	}
+	if !observed {
+		t.Fatal("load failed event not observed")
+	}
+}
+
+func TestReloadFailedObserverSeesDegradedLastKnownGoodState(t *testing.T) {
+	var manager *configkit.Manager[stepsTestConfig]
+	var observed bool
+	observer := configkit.Observer(func(_ context.Context, event configkit.Event) {
+		if event.Kind != configkit.EventKindLoadFailed {
+			return
+		}
+		observed = true
+		status := manager.LifecycleStatus()
+		if status.State != configkit.LifecycleStateDegraded || event.ManagerState != status.State {
+			t.Fatalf("event state = %q, manager state = %q; want degraded", event.ManagerState, status.State)
+		}
+		value, ok := manager.Value()
+		if !ok || value.Name != "api" {
+			t.Fatalf("manager value = %+v, ok = %t; want last-known-good config", value, ok)
+		}
+		if event.Apply == nil || event.Apply.Published || event.Apply.Previous == nil || event.Apply.Current == nil {
+			t.Fatalf("completion apply = %+v, want unpublished retained snapshot", event.Apply)
+		}
+		if event.Apply.Previous.Checksum != event.Apply.Current.Checksum {
+			t.Fatalf("apply previous checksum = %q, current = %q; want retained snapshot", event.Apply.Previous.Checksum, event.Apply.Current.Checksum)
+		}
+	})
+	manager = configkit.NewManager[stepsTestConfig](configkit.WithObservers(observer))
+	if _, err := manager.Apply(context.Background(), succeededStatusTestResult("v1", "sum-1")); err != nil {
+		t.Fatalf("seed manager: %v", err)
+	}
+
+	if _, err := manager.Load(context.Background(), configkit.AttemptKindReload, configkit.SourceData{
+		Data: []byte(`{"name":`),
+	}, testPipeline()); err == nil {
+		t.Fatal("manager reload error = nil, want decode failure")
+	}
+	if !observed {
+		t.Fatal("load failed event not observed")
 	}
 }
 

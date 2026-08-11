@@ -33,6 +33,11 @@ behavior and can deadlock. Read-only calls such as `LifecycleStatus`, `Lifecycle
 `Snapshot`, and `Value` are acceptable because they do not start another
 lifecycle operation.
 
+Manager state is updated before `load_succeeded` or `load_failed` is delivered.
+Synchronous completion observers therefore see `LifecycleStatus`,
+`LifecycleInspection`, `Snapshot`, and `Value` consistent with the event they
+are handling. Notifications run without holding the manager state lock.
+
 Use `AsyncObserver` or hand work off to another goroutine for follow-up work
 that may block, call external systems, or trigger another load/apply operation.
 
@@ -43,6 +48,8 @@ that may block, call external systems, or trigger another load/apply operation.
 Events can include:
 
 - event kind
+- normalized Opskit component name
+- manager state at the event boundary
 - attempt ID
 - attempt kind
 - source metadata
@@ -51,6 +58,26 @@ Events can include:
 - snapshot metadata
 - apply result
 - event time
+
+Attempt IDs are manager-local. For manager-owned events, use
+`(ComponentName, AttemptID)` as the correlation key. Give managers distinct
+component names when they share an observer or telemetry backend. Configkit
+does not generate a separate runtime manager UUID.
+
+Manager-owned load events have this ordering and state contract:
+
+| Event | Event state | Apply result | Synchronous manager reads |
+| --- | --- | --- | --- |
+| `load_started` | State before the attempt | None | Pre-attempt state |
+| `load_succeeded` | Resulting state | Present | Published snapshot is current |
+| `load_failed` | Resulting `failed` or `degraded` state | Present | Failure is recorded and last-known-good is retained |
+| `snapshot_applied` | Post-publication state | Present | Published snapshot is current |
+
+Successful manager-owned loads emit `load_started`, `load_succeeded`, then
+`snapshot_applied`. Failed loads emit `load_started`, then `load_failed`.
+Completion events are delivered after manager state mutation;
+`snapshot_applied` follows the completion event to preserve lifecycle event
+ordering.
 
 Source metadata, revisions, checksums, and public failure detail should be safe
 for the observer audience. Arbitrary returned error strings are not included.
@@ -68,7 +95,10 @@ manager := configkit.NewManager[AppConfig](
 ```
 
 It logs lifecycle metadata only. It does not log typed config values or redacted
-fields.
+fields. Depending on the event, attributes include `event`, `component_name`,
+`manager_state`, `attempt_id`, `attempt_kind`, `attempt_status`, source and
+revision metadata, stage and safe failure detail, checksums, attempt timing,
+and `published`/`changed` apply results.
 
 ## Async Delivery
 
@@ -86,6 +116,11 @@ manager := configkit.NewManager[AppConfig](
 
 `Notify` is non-blocking. If the queue is full or closed, events are dropped
 and counted by `Dropped`.
+
+Queued events are cloned and are the authoritative event-time view. By the time
+the wrapped observer runs, a live manager read may observe the same state or a
+newer attempt. Delivery through one `AsyncObserver` preserves enqueue order for
+events that are not dropped, but no global ordering is defined across managers.
 
 `Close` stops new events and waits for queued events to drain. It cannot
 preempt a wrapped observer that is blocked handling an event.
@@ -134,11 +169,17 @@ functions may create their own spans when they need execution-level tracing.
 Default OTel attributes are intentionally low-cardinality:
 
 - `configkit.event`
+- `configkit.component.name`
+- `configkit.manager.state`
 - `configkit.attempt.kind`
 - `configkit.attempt.status`
 - `configkit.attempt.stage`
 - `configkit.source.kind`
+- `configkit.apply.published`
 - `configkit.apply.changed`
+
+Spans also include `configkit.attempt.id`. Attempt IDs are excluded from metric
+attributes because they are unbounded.
 
 Source names are excluded by default. Use `otel.WithSourceName()` only when
 source names are stable enough for telemetry and safe for that audience.

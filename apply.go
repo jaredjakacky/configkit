@@ -3,6 +3,7 @@ package configkit
 import (
 	"errors"
 	"fmt"
+	"time"
 )
 
 // ErrInvalidLoadResult is returned when a LoadResult cannot be safely applied.
@@ -22,6 +23,11 @@ type ApplyResult struct {
 
 	// Current describes the snapshot that is current after apply, if any.
 	Current *SnapshotMetadata `json:"current,omitempty"`
+
+	// AppliedAt is when the manager accepted this result and committed its
+	// lifecycle-state mutation. It is set for both successful and failed
+	// accepted results.
+	AppliedAt time.Time `json:"applied_at"`
 }
 
 func cloneApplyResult(in ApplyResult) ApplyResult {
@@ -55,9 +61,41 @@ func validateLoadResult[T any](result LoadResult[T]) error {
 		if result.Snapshot == nil {
 			return fmt.Errorf("%w: succeeded attempt missing snapshot", ErrInvalidLoadResult)
 		}
+		if result.Attempt.Stage != "" {
+			return fmt.Errorf("%w: succeeded attempt includes failure stage", ErrInvalidLoadResult)
+		}
+		if result.Attempt.Failure != nil {
+			return fmt.Errorf("%w: succeeded attempt includes failure detail", ErrInvalidLoadResult)
+		}
+
+		metadata := result.Snapshot.Metadata()
+		if metadata.Checksum == "" {
+			return fmt.Errorf("%w: succeeded snapshot missing checksum", ErrInvalidLoadResult)
+		}
+		if result.Attempt.Checksum == "" {
+			return fmt.Errorf("%w: succeeded attempt missing checksum", ErrInvalidLoadResult)
+		}
+		if result.Attempt.Checksum != metadata.Checksum {
+			return fmt.Errorf("%w: succeeded attempt checksum does not match snapshot", ErrInvalidLoadResult)
+		}
+		if result.Attempt.Source != metadata.Source {
+			return fmt.Errorf("%w: succeeded attempt source does not match snapshot", ErrInvalidLoadResult)
+		}
+		if result.Attempt.Revision != metadata.Revision {
+			return fmt.Errorf("%w: succeeded attempt revision does not match snapshot", ErrInvalidLoadResult)
+		}
 	case AttemptStatusFailed:
 		if result.Snapshot != nil {
 			return fmt.Errorf("%w: failed attempt includes snapshot", ErrInvalidLoadResult)
+		}
+		if result.Attempt.Stage == "" {
+			return fmt.Errorf("%w: failed attempt missing failure stage", ErrInvalidLoadResult)
+		}
+		if result.Attempt.Failure == nil || (result.Attempt.Failure.Code == "" && result.Attempt.Failure.Message == "") {
+			return fmt.Errorf("%w: failed attempt missing public failure detail", ErrInvalidLoadResult)
+		}
+		if result.Attempt.Checksum != "" {
+			return fmt.Errorf("%w: failed attempt includes checksum", ErrInvalidLoadResult)
 		}
 	default:
 		return fmt.Errorf("%w: unknown attempt status %q", ErrInvalidLoadResult, result.Attempt.Status)

@@ -15,10 +15,14 @@ import (
 // data.
 var ErrLifecyclePanicked = errors.New("configkit: lifecycle panicked")
 
+var errEmptyChecksum = errors.New("checksummer returned an empty checksum")
+
 // LoadResult describes the result of one configuration load attempt.
 //
-// A successful load produces a Snapshot and a successful AttemptRecord.
-// A failed load produces no Snapshot and a failed AttemptRecord.
+// A successful load produces a Snapshot and a successful AttemptRecord with
+// matching source, revision, and non-empty checksum metadata. It has no failure
+// stage or detail. A failed load produces no Snapshot or checksum and a failed
+// AttemptRecord with a stage and safe public failure detail.
 type LoadResult[T any] struct {
 	Snapshot *Snapshot[T]
 	Attempt  AttemptRecord
@@ -39,13 +43,14 @@ type ManagedLoadResult[T any] struct {
 // If the source read fails, LoadFromSource returns a failed LoadResult with no
 // snapshot. If the source read succeeds, it runs the load lifecycle. It returns
 // a LoadResult but does not store or publish the produced snapshot.
+// Nil and typed-nil Source values return ErrMissingSource.
 //
 // Callers must pass a non-nil context. Passing nil is invalid and may panic.
 func LoadFromSource[T any](ctx context.Context, kind AttemptKind, source Source, pipeline Pipeline[T]) (LoadResult[T], error) {
 	startedAt := time.Now().UTC()
 	var sourceMetadata SourceMetadata
 	var metadataErr error
-	if source != nil {
+	if !isNilSource(source) {
 		sourceMetadata, metadataErr = loadSourceMetadata(source)
 	}
 
@@ -53,7 +58,7 @@ func LoadFromSource[T any](ctx context.Context, kind AttemptKind, source Source,
 }
 
 func loadFromSourceWithMetadata[T any](ctx context.Context, kind AttemptKind, source Source, pipeline Pipeline[T], startedAt time.Time, sourceMetadata SourceMetadata, metadataErr error) (LoadResult[T], error) {
-	if source == nil {
+	if isNilSource(source) {
 		return LoadResult[T]{
 			Attempt: AttemptRecord{
 				Kind:      kind,
@@ -285,7 +290,15 @@ func redactConfig[T any](ctx context.Context, redact Redactor[T], value T) (reda
 func checksumConfig[T any](ctx context.Context, checksum Checksummer[T], value T) (sum string, err error) {
 	defer recoverPipelinePanic("checksum config", &err)
 
-	return checksum(ctx, value)
+	sum, err = checksum(ctx, value)
+	if err != nil {
+		return "", err
+	}
+	if sum == "" {
+		return "", errEmptyChecksum
+	}
+
+	return sum, nil
 }
 
 func copyConfig[T any](ctx context.Context, copy Copier[T], value T) (out T, err error) {

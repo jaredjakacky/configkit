@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	configkit "github.com/jaredjakacky/configkit"
 	opskit "github.com/jaredjakacky/opskit"
@@ -132,6 +133,66 @@ func TestManagerOpskitStatusAndReadinessMapLifecycleStates(t *testing.T) {
 				t.Fatalf("readiness items = %+v, want no synthetic child items", readiness.Items)
 			}
 		})
+	}
+}
+
+func TestManagerOpskitStatusUpdatedAtUsesApplyTime(t *testing.T) {
+	t.Run("successful apply", func(t *testing.T) {
+		manager := configkit.NewManager[stepsTestConfig]()
+		endedAt := time.Now().UTC().Add(-2 * time.Hour)
+		apply, err := manager.Apply(context.Background(), succeededStatusTestResultAt("v1", "sum-1", endedAt))
+		if err != nil {
+			t.Fatalf("apply success: %v", err)
+		}
+
+		assertOpskitUpdatedAtMatchesApply(t, manager, apply, endedAt)
+	})
+
+	t.Run("failed initial apply", func(t *testing.T) {
+		manager := configkit.NewManager[stepsTestConfig]()
+		endedAt := time.Now().UTC().Add(-2 * time.Hour)
+		apply, err := manager.Apply(context.Background(), failedStatusTestResultAt("safe failure", endedAt))
+		if err != nil {
+			t.Fatalf("apply failure: %v", err)
+		}
+
+		assertOpskitUpdatedAtMatchesApply(t, manager, apply, endedAt)
+	})
+
+	t.Run("degraded apply", func(t *testing.T) {
+		manager := configkit.NewManager[stepsTestConfig]()
+		if _, err := manager.Apply(context.Background(), succeededStatusTestResultAt("v1", "sum-1", time.Now().UTC().Add(-3*time.Hour))); err != nil {
+			t.Fatalf("seed manager: %v", err)
+		}
+		endedAt := time.Now().UTC().Add(-2 * time.Hour)
+		apply, err := manager.Apply(context.Background(), failedStatusTestResultAt("safe failure", endedAt))
+		if err != nil {
+			t.Fatalf("apply failure: %v", err)
+		}
+
+		assertOpskitUpdatedAtMatchesApply(t, manager, apply, endedAt)
+		if status := manager.Status(context.Background()); status.State != opskit.StateDegraded {
+			t.Fatalf("status state = %q, want %q", status.State, opskit.StateDegraded)
+		}
+	})
+
+	t.Run("unloaded", func(t *testing.T) {
+		status := configkit.NewManager[stepsTestConfig]().Status(context.Background())
+		if status.UpdatedAt != nil {
+			t.Fatalf("updated at = %v, want nil", status.UpdatedAt)
+		}
+	})
+}
+
+func assertOpskitUpdatedAtMatchesApply(t *testing.T, manager *configkit.Manager[stepsTestConfig], apply configkit.ApplyResult, endedAt time.Time) {
+	t.Helper()
+
+	status := manager.Status(context.Background())
+	if status.UpdatedAt == nil || !status.UpdatedAt.Equal(apply.AppliedAt) {
+		t.Fatalf("updated at = %v, want apply time %v", status.UpdatedAt, apply.AppliedAt)
+	}
+	if status.UpdatedAt.Equal(endedAt) {
+		t.Fatalf("updated at = %v, must not use historical attempt end time", status.UpdatedAt)
 	}
 }
 

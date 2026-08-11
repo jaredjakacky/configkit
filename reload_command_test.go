@@ -267,6 +267,16 @@ func TestReloadCommandLifecycleFailuresReturnFailedCommands(t *testing.T) {
 			},
 			failureCode: configkit.FailureCodeChecksumFailed,
 		},
+		{
+			name:   "empty checksum",
+			source: validReloadCommandSource,
+			mutate: func(p *configkit.Pipeline[reloadCommandTestConfig]) {
+				p.Checksum = func(context.Context, reloadCommandTestConfig) (string, error) {
+					return "", nil
+				}
+			},
+			failureCode: configkit.FailureCodeChecksumFailed,
+		},
 	}
 
 	for _, tt := range tests {
@@ -515,27 +525,40 @@ func TestReloadCommandMissingManagerRejected(t *testing.T) {
 }
 
 func TestReloadCommandMissingSourceIsNotReadyAndRejected(t *testing.T) {
-	manager := loadedReloadCommandManager(t)
-	command := configkit.ReloadCommand(manager, nil, reloadCommandTestPipeline())
+	var typedNil *typedNilTestSource
+	tests := []struct {
+		name   string
+		source configkit.Source
+	}{
+		{name: "nil"},
+		{name: "typed nil", source: typedNil},
+	}
 
-	if status := command.Status(context.Background()); status.State != opskit.StateNotReady || status.Ready {
-		t.Fatalf("status = %+v, want not ready", status)
-	}
-	result := command.HandleCommand(context.Background(), opskit.NewCommandRequest("config/reload", nil))
-	if result.State != opskit.StateNotReady || result.Accepted {
-		t.Fatalf("result = %+v, want rejected command", result)
-	}
-	if result.Failure == nil || result.Failure.Code != configkit.FailureCodeMissingSource {
-		t.Fatalf("failure = %+v, want missing source", result.Failure)
-	}
-	if result.Result != nil {
-		t.Fatalf("result payload = %+v, want nil", result.Result)
-	}
-	if status := manager.LifecycleStatus(); status.State != configkit.LifecycleStateLoaded || status.Current == nil || status.Current.Revision != "rev-1" {
-		t.Fatalf("manager status = %+v, want unchanged loaded rev-1", status)
-	}
-	if attempts := manager.Attempts(); len(attempts) != 1 {
-		t.Fatalf("manager attempts = %d, want only initial load", len(attempts))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := loadedReloadCommandManager(t)
+			command := configkit.ReloadCommand(manager, tt.source, reloadCommandTestPipeline())
+
+			if status := command.Status(context.Background()); status.State != opskit.StateNotReady || status.Ready {
+				t.Fatalf("status = %+v, want not ready", status)
+			}
+			result := command.HandleCommand(context.Background(), opskit.NewCommandRequest("config/reload", nil))
+			if result.State != opskit.StateNotReady || result.Accepted {
+				t.Fatalf("result = %+v, want rejected command", result)
+			}
+			if result.Failure == nil || result.Failure.Code != configkit.FailureCodeMissingSource {
+				t.Fatalf("failure = %+v, want missing source", result.Failure)
+			}
+			if result.Result != nil {
+				t.Fatalf("result payload = %+v, want nil", result.Result)
+			}
+			if status := manager.LifecycleStatus(); status.State != configkit.LifecycleStateLoaded || status.Current == nil || status.Current.Revision != "rev-1" {
+				t.Fatalf("manager status = %+v, want unchanged loaded rev-1", status)
+			}
+			if attempts := manager.Attempts(); len(attempts) != 1 {
+				t.Fatalf("manager attempts = %d, want only initial load", len(attempts))
+			}
+		})
 	}
 }
 

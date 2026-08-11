@@ -93,8 +93,9 @@ type managerOptions struct {
 // Observers run synchronously by default. They should return quickly and must
 // not call Load, LoadFromSource, or Apply on the same manager. Read-only calls
 // such as LifecycleStatus, LifecycleInspection, Snapshot, and Value are
-// acceptable. Use AsyncObserver or another goroutine for follow-up work that
-// may block or trigger lifecycle operations.
+// acceptable. Synchronous observers see manager state consistent with the
+// event boundary. Use AsyncObserver or another goroutine for follow-up work
+// that may block or trigger lifecycle operations.
 func WithObservers(observers ...Observer) ManagerOption {
 	return func(options *managerOptions) {
 		options.observers = append(options.observers, observers...)
@@ -224,32 +225,32 @@ func (m *Manager[T]) LifecycleInspection() LifecycleInspection {
 
 func (m *Manager[T]) statusLocked() LifecycleStatus {
 	status := LifecycleStatus{
+		State:       m.lifecycleStateLocked(),
 		LastAttempt: cloneAttemptRecordPtr(m.lastAttempt),
 		LastSuccess: cloneAttemptRecordPtr(m.lastSuccess),
 		LastFailure: cloneAttemptRecordPtr(m.lastFailure),
 		LastApply:   cloneApplyResultPtr(m.lastApply),
 	}
 
+	if m.current != nil {
+		metadata := m.current.Metadata()
+		status.Current = &metadata
+	}
+
+	return status
+}
+
+func (m *Manager[T]) lifecycleStateLocked() LifecycleState {
 	if m.current == nil {
 		if m.lastAttempt != nil && m.lastAttempt.Status == AttemptStatusFailed {
-			status.State = LifecycleStateFailed
-			return status
+			return LifecycleStateFailed
 		}
-
-		status.State = LifecycleStateUnloaded
-		return status
+		return LifecycleStateUnloaded
 	}
-
-	metadata := m.current.Metadata()
-	status.Current = &metadata
-
 	if m.lastAttempt != nil && m.lastAttempt.Status == AttemptStatusFailed {
-		status.State = LifecycleStateDegraded
-		return status
+		return LifecycleStateDegraded
 	}
-
-	status.State = LifecycleStateLoaded
-	return status
+	return LifecycleStateLoaded
 }
 
 // Snapshot returns the currently published configuration snapshot.
@@ -285,9 +286,12 @@ func (m *Manager[T]) Value() (T, bool) {
 // Successful results replace the current snapshot and update last success.
 // Failed results preserve the current snapshot and update last failure. Invalid
 // results return an error wrapping ErrInvalidLoadResult and do not mutate
-// manager state. Apply assigns a fresh manager-local attempt ID regardless of
-// any ID on the input result. Apply is serialized with manager-owned load
-// attempts.
+// manager state. Successful results must have matching source, revision, and
+// non-empty checksum metadata and no failure stage or detail. Failed results
+// must have no snapshot or checksum and must have a failure stage and safe
+// public failure detail. Apply assigns a fresh manager-local attempt ID
+// regardless of any ID on the input result. Apply is serialized with
+// manager-owned load attempts.
 //
 // If ctx is canceled before Apply gains lifecycle admission, Apply returns the
 // context error without validating or recording the result, assigning an
@@ -305,27 +309,30 @@ func (m *Manager[T]) Apply(ctx context.Context, result LoadResult[T]) (ApplyResu
 	}
 	defer m.attemptAdmission.release()
 
-	return m.applyValidated(ctx, result, true)
-}
-
-func (m *Manager[T]) applyValidated(ctx context.Context, result LoadResult[T], assignAttemptID bool) (ApplyResult, error) {
 	if err := validateLoadResult(result); err != nil {
 		return ApplyResult{}, err
 	}
-	if assignAttemptID {
-		m.assignAttemptID(&result)
-	}
+	m.assignAttemptID(&result)
 
-	return m.apply(ctx, result), nil
+	applyResult, managerState := m.apply(result)
+	m.notifySnapshotApplied(ctx, result.Attempt, applyResult, managerState)
+	return applyResult, nil
 }
 
-func (m *Manager[T]) apply(ctx context.Context, result LoadResult[T]) ApplyResult {
-	var applied *SnapshotMetadata
-	var applyForEvent *ApplyResult
-	var attemptForEvent *AttemptRecord
+func (m *Manager[T]) applyValidated(result LoadResult[T]) (ApplyResult, LifecycleState, error) {
+	if err := validateLoadResult(result); err != nil {
+		return ApplyResult{}, m.LifecycleStatus().State, err
+	}
+
+	applyResult, managerState := m.apply(result)
+	return applyResult, managerState, nil
+}
+
+func (m *Manager[T]) apply(result LoadResult[T]) (ApplyResult, LifecycleState) {
 	var applyResult ApplyResult
 
 	m.mu.Lock()
+	applyResult.AppliedAt = time.Now().UTC()
 
 	attempt := cloneAttemptRecord(result.Attempt)
 	lastAttempt := cloneAttemptRecord(attempt)
@@ -345,15 +352,8 @@ func (m *Manager[T]) apply(ctx context.Context, result LoadResult[T]) ApplyResul
 		m.lastSuccess = &success
 
 		metadata := snapshot.Metadata()
-		applied = &metadata
 		applyResult.Current = &metadata
 		applyResult.Changed = applyResult.Previous == nil || applyResult.Previous.Checksum != metadata.Checksum
-
-		attemptCopy := cloneAttemptRecord(attempt)
-		attemptForEvent = &attemptCopy
-
-		applyCopy := cloneApplyResult(applyResult)
-		applyForEvent = &applyCopy
 	} else if attempt.Status == AttemptStatusFailed {
 		failure := cloneAttemptRecord(attempt)
 		m.lastFailure = &failure
@@ -361,24 +361,11 @@ func (m *Manager[T]) apply(ctx context.Context, result LoadResult[T]) ApplyResul
 
 	applyStored := cloneApplyResult(applyResult)
 	m.lastApply = &applyStored
+	managerState := m.lifecycleStateLocked()
 
 	m.mu.Unlock()
 
-	if applied != nil {
-		m.notify(ctx, Event{
-			Kind:        EventKindSnapshotApplied,
-			AttemptID:   attempt.ID,
-			AttemptKind: attempt.Kind,
-			Source:      attempt.Source,
-			Revision:    attempt.Revision,
-			Attempt:     attemptForEvent,
-			Snapshot:    applied,
-			Apply:       applyForEvent,
-			OccurredAt:  time.Now().UTC(),
-		})
-	}
-
-	return applyResult
+	return applyResult, managerState
 }
 
 // Load runs one load lifecycle and applies the result to the manager.
@@ -387,6 +374,11 @@ func (m *Manager[T]) apply(ctx context.Context, result LoadResult[T]) ApplyResul
 // snapshot is left unchanged and the failed attempt is recorded. The returned
 // ManagedLoadResult includes both the stateless load result and the manager
 // apply result.
+//
+// Load updates manager state before delivering load_succeeded or load_failed.
+// On successful publication, snapshot_applied is delivered after the load
+// completion event. Observer notifications run without holding the manager
+// state lock.
 //
 // If ctx is canceled before Load gains lifecycle admission, Load returns the
 // context error without starting or recording an attempt. Once admitted,
@@ -405,11 +397,12 @@ func (m *Manager[T]) Load(ctx context.Context, kind AttemptKind, data SourceData
 	loadResult, err := Load(ctx, kind, data, pipeline)
 	loadResult.Attempt.ID = attemptID
 
-	m.notifyLoadFinished(ctx, attemptID, kind, loadResult, err)
-	applyResult, applyErr := m.applyValidated(ctx, loadResult, false)
+	applyResult, managerState, applyErr := m.applyValidated(loadResult)
 	if err == nil {
 		err = applyErr
 	}
+	m.notifyLoadFinished(ctx, attemptID, kind, loadResult, applyResult, managerState, err)
+	m.notifySnapshotApplied(ctx, loadResult.Attempt, applyResult, managerState)
 	return ManagedLoadResult[T]{
 		Load:  loadResult,
 		Apply: applyResult,
@@ -423,6 +416,12 @@ func (m *Manager[T]) Load(ctx context.Context, kind AttemptKind, data SourceData
 // snapshot is left unchanged and the failed attempt is recorded. The returned
 // ManagedLoadResult includes both the stateless load result and the manager
 // apply result.
+//
+// LoadFromSource updates manager state before delivering load_succeeded or
+// load_failed. On successful publication, snapshot_applied is delivered after
+// the load completion event. Observer notifications run without holding the
+// manager state lock.
+// An admitted nil or typed-nil Source records the normal missing-source failure.
 //
 // If ctx is canceled before LoadFromSource gains lifecycle admission,
 // LoadFromSource returns the context error without reading source metadata,
@@ -439,7 +438,7 @@ func (m *Manager[T]) LoadFromSource(ctx context.Context, kind AttemptKind, sourc
 	startedAt := time.Now().UTC()
 	var sourceMetadata SourceMetadata
 	var metadataErr error
-	if source != nil {
+	if !isNilSource(source) {
 		sourceMetadata, metadataErr = loadSourceMetadata(source)
 	}
 	attemptID := m.nextManagedAttemptID()
@@ -448,11 +447,12 @@ func (m *Manager[T]) LoadFromSource(ctx context.Context, kind AttemptKind, sourc
 	loadResult, err := loadFromSourceWithMetadata(ctx, kind, source, pipeline, startedAt, sourceMetadata, metadataErr)
 	loadResult.Attempt.ID = attemptID
 
-	m.notifyLoadFinished(ctx, attemptID, kind, loadResult, err)
-	applyResult, applyErr := m.applyValidated(ctx, loadResult, false)
+	applyResult, managerState, applyErr := m.applyValidated(loadResult)
 	if err == nil {
 		err = applyErr
 	}
+	m.notifyLoadFinished(ctx, attemptID, kind, loadResult, applyResult, managerState, err)
+	m.notifySnapshotApplied(ctx, loadResult.Attempt, applyResult, managerState)
 	return ManagedLoadResult[T]{
 		Load:  loadResult,
 		Apply: applyResult,
@@ -460,17 +460,20 @@ func (m *Manager[T]) LoadFromSource(ctx context.Context, kind AttemptKind, sourc
 }
 
 func (m *Manager[T]) notifyLoadStarted(ctx context.Context, attemptID uint64, kind AttemptKind, source SourceMetadata, revision string) {
+	managerState := m.LifecycleStatus().State
 	m.notify(ctx, Event{
-		Kind:        EventKindLoadStarted,
-		AttemptID:   attemptID,
-		AttemptKind: kind,
-		Source:      source,
-		Revision:    revision,
-		OccurredAt:  time.Now().UTC(),
+		Kind:          EventKindLoadStarted,
+		ComponentName: m.componentName(),
+		ManagerState:  managerState,
+		AttemptID:     attemptID,
+		AttemptKind:   kind,
+		Source:        source,
+		Revision:      revision,
+		OccurredAt:    time.Now().UTC(),
 	})
 }
 
-func (m *Manager[T]) notifyLoadFinished(ctx context.Context, attemptID uint64, kind AttemptKind, result LoadResult[T], err error) {
+func (m *Manager[T]) notifyLoadFinished(ctx context.Context, attemptID uint64, kind AttemptKind, result LoadResult[T], apply ApplyResult, managerState LifecycleState, err error) {
 	eventKind := EventKindLoadSucceeded
 	if err != nil {
 		eventKind = EventKindLoadFailed
@@ -483,15 +486,42 @@ func (m *Manager[T]) notifyLoadFinished(ctx context.Context, attemptID uint64, k
 	}
 
 	attempt := cloneAttemptRecord(result.Attempt)
+	applyForEvent := cloneApplyResult(apply)
 	m.notify(ctx, Event{
-		Kind:        eventKind,
-		AttemptID:   attemptID,
-		AttemptKind: kind,
-		Source:      attempt.Source,
-		Revision:    attempt.Revision,
-		Attempt:     &attempt,
-		Snapshot:    snapshot,
-		OccurredAt:  time.Now().UTC(),
+		Kind:          eventKind,
+		ComponentName: m.componentName(),
+		ManagerState:  managerState,
+		AttemptID:     attemptID,
+		AttemptKind:   kind,
+		Source:        attempt.Source,
+		Revision:      attempt.Revision,
+		Attempt:       &attempt,
+		Snapshot:      snapshot,
+		Apply:         &applyForEvent,
+		OccurredAt:    time.Now().UTC(),
+	})
+}
+
+func (m *Manager[T]) notifySnapshotApplied(ctx context.Context, attempt AttemptRecord, apply ApplyResult, managerState LifecycleState) {
+	if !apply.Published || apply.Current == nil {
+		return
+	}
+
+	attemptForEvent := cloneAttemptRecord(attempt)
+	snapshotForEvent := cloneSnapshotMetadataPtr(apply.Current)
+	applyForEvent := cloneApplyResult(apply)
+	m.notify(ctx, Event{
+		Kind:          EventKindSnapshotApplied,
+		ComponentName: m.componentName(),
+		ManagerState:  managerState,
+		AttemptID:     attempt.ID,
+		AttemptKind:   attempt.Kind,
+		Source:        attempt.Source,
+		Revision:      attempt.Revision,
+		Attempt:       &attemptForEvent,
+		Snapshot:      snapshotForEvent,
+		Apply:         &applyForEvent,
+		OccurredAt:    time.Now().UTC(),
 	})
 }
 

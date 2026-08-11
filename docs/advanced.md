@@ -54,6 +54,12 @@ when that is part of the application contract.
 Use a custom `Checksummer[T]` when `SHA256JSONChecksum` is not the right
 fingerprint.
 
+A custom Checksummer must return a non-empty string whenever it returns a nil
+error. Configkit does not impose an encoding, length, algorithm, or
+cryptographic policy. The implementation remains responsible for stability and
+collision behavior; returning a constant non-empty value is allowed but makes
+different effective configurations compare unchanged.
+
 Common reasons:
 
 - exclude operationally sensitive fields
@@ -126,6 +132,20 @@ applyResult, applyErr := manager.Apply(ctx, loadResult)
 attempt ID, and mutates manager state only when the result is internally
 consistent.
 
+A successful result must have a snapshot; matching non-empty attempt and
+snapshot checksums; matching source and revision metadata; and no failure stage
+or failure detail. A failed result must have no snapshot or checksum and must
+have a non-empty failure stage plus non-zero safe public failure detail.
+Configkit does not re-run application validation, recompute checksums, validate
+source or revision formats, or impose checksum formats at this boundary.
+
+`SnapshotMetadata.LoadedAt` records when the stateless load produced the
+snapshot. `ApplyResult.AppliedAt` records when the manager committed the result,
+which may be much later. Configkit intentionally permits delayed and
+out-of-order external application because revision and rollback policy belongs
+to the application. Attempt history and manager-local attempt IDs follow apply
+order for external results, not necessarily `Attempt.EndedAt` order.
+
 Manager lifecycle admission is serialized and context-aware. If `ctx` is
 canceled before `Apply` is admitted, Apply returns the context error before
 validating or recording the result, assigning an attempt ID, notifying
@@ -152,6 +172,10 @@ Good reasons:
 Avoid multiple managers for fields that are really one atomic application
 configuration value. A single snapshot gives readers a coherent view.
 
+When multiple managers share observers or a telemetry backend, configure a
+distinct Opskit component name for each manager. Attempt IDs are manager-local,
+so lifecycle events are correlated by `(ComponentName, AttemptID)`.
+
 ## Async Observers
 
 Observers run synchronously unless wrapped.
@@ -166,6 +190,10 @@ defer async.Close(context.Background())
 Pick buffer sizes deliberately. A larger buffer absorbs short bursts but uses
 more memory and can delay visibility. A full or closed observer drops new
 events and increments `Dropped`.
+
+Queued Event fields preserve event-time component identity, manager state,
+attempt, snapshot, and apply metadata. Live reads from the manager during async
+delivery may observe a newer attempt, so use Event for event-time decisions.
 
 ## Strict Readiness
 

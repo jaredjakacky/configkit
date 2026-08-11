@@ -40,7 +40,8 @@ Servekit, Workerkit, OpenTelemetry, or custom redaction.
 ### [`examples/02-file-source`](../examples/02-file-source)
 
 **What it demonstrates:** Loading typed config from a local JSON file with safe
-source metadata, file-byte revision, snapshot checksum, and loaded timestamp.
+source metadata, file-byte revision, snapshot checksum, and load-completion
+timestamp.
 
 **Run it:**
 
@@ -49,7 +50,8 @@ go run ./examples/02-file-source
 ```
 
 **Expected output:** The typed config, source kind/name, source revision,
-snapshot checksum, and `loaded_at` timestamp.
+snapshot checksum, and snapshot `loaded_at` timestamp. This is when the load
+produced the snapshot, not a separate manager publication timestamp.
 
 **What to notice:** `FileSource` revisions are SHA-256 fingerprints of file
 bytes. Source metadata should remain safe for operational output.
@@ -131,8 +133,9 @@ files, or custom source behavior.
 go run ./examples/06-observability-slog
 ```
 
-**Expected output:** Log records for a successful initial load, failed reload,
-and final degraded manager state.
+**Expected output:** Log records with `component_name=search-config` and
+event-time manager state for a successful initial load, failed reload, and
+final degraded manager state.
 
 **What to notice:** `SlogObserver` logs lifecycle metadata, not raw typed config
 values or redacted fields.

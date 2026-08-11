@@ -51,11 +51,13 @@ func TestSlogEventAttrsIncludesOperationalMetadata(t *testing.T) {
 	startedAt := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
 	endedAt := startedAt.Add(250 * time.Millisecond)
 	event := configkit.Event{
-		Kind:        configkit.EventKindSnapshotApplied,
-		AttemptID:   10,
-		AttemptKind: configkit.AttemptKindReload,
-		Source:      configkit.SourceMetadata{Name: "memory", Kind: "memory"},
-		Revision:    "rev-1",
+		Kind:          configkit.EventKindSnapshotApplied,
+		ComponentName: "payments-config",
+		ManagerState:  configkit.LifecycleStateLoaded,
+		AttemptID:     10,
+		AttemptKind:   configkit.AttemptKindReload,
+		Source:        configkit.SourceMetadata{Name: "memory", Kind: "memory"},
+		Revision:      "rev-1",
 		Attempt: &configkit.AttemptRecord{
 			Status:    configkit.AttemptStatusSucceeded,
 			Stage:     configkit.AttemptStageChecksum,
@@ -75,6 +77,12 @@ func TestSlogEventAttrsIncludesOperationalMetadata(t *testing.T) {
 	if got := attrs["event"].String(); got != string(configkit.EventKindSnapshotApplied) {
 		t.Fatalf("event attr = %q, want %q", got, configkit.EventKindSnapshotApplied)
 	}
+	if got := attrs["component_name"].String(); got != "payments-config" {
+		t.Fatalf("component_name attr = %q, want payments-config", got)
+	}
+	if got := attrs["manager_state"].String(); got != string(configkit.LifecycleStateLoaded) {
+		t.Fatalf("manager_state attr = %q, want %q", got, configkit.LifecycleStateLoaded)
+	}
 	if got := attrs["attempt_id"].Uint64(); got != 10 {
 		t.Fatalf("attempt_id attr = %d, want 10", got)
 	}
@@ -92,6 +100,9 @@ func TestSlogEventAttrsIncludesOperationalMetadata(t *testing.T) {
 	}
 	if got := attrs["attempt_checksum"].String(); got != "attempt-sum" {
 		t.Fatalf("attempt_checksum attr = %q, want attempt-sum", got)
+	}
+	if got := attrs["attempt_status"].String(); got != string(configkit.AttemptStatusSucceeded) {
+		t.Fatalf("attempt_status attr = %q, want %q", got, configkit.AttemptStatusSucceeded)
 	}
 	if got := attrs["attempt_stage"].String(); got != string(configkit.AttemptStageChecksum) {
 		t.Fatalf("attempt_stage attr = %q, want %q", got, configkit.AttemptStageChecksum)

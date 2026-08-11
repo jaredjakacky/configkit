@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	configkit "github.com/jaredjakacky/configkit"
@@ -183,7 +184,8 @@ func (o *observer) Observe(ctx context.Context, event configkit.Event) {
 	}
 }
 
-func (o *observer) finishLoadSpan(ctx context.Context, event configkit.Event, attrs []attribute.KeyValue) {
+func (o *observer) finishLoadSpan(ctx context.Context, event configkit.Event, metricAttrs []attribute.KeyValue) {
+	attrs := spanAttrs(event, metricAttrs)
 	_, span := o.tracer.Start(ctx, "configkit.load", trace.WithAttributes(attrs...), trace.WithTimestamp(attemptStartTime(event)))
 
 	span.SetAttributes(attrs...)
@@ -203,7 +205,8 @@ func (o *observer) finishLoadSpan(ctx context.Context, event configkit.Event, at
 	span.End(trace.WithTimestamp(attemptEndTime(event)))
 }
 
-func (o *observer) recordApplySpan(ctx context.Context, event configkit.Event, attrs []attribute.KeyValue) {
+func (o *observer) recordApplySpan(ctx context.Context, event configkit.Event, metricAttrs []attribute.KeyValue) {
+	attrs := spanAttrs(event, metricAttrs)
 	_, span := o.tracer.Start(ctx, "configkit.apply", trace.WithAttributes(attrs...), trace.WithTimestamp(eventTime(event)))
 	defer span.End(trace.WithTimestamp(eventTime(event)))
 
@@ -214,6 +217,12 @@ func (o *observer) recordApplySpan(ctx context.Context, event configkit.Event, a
 func (o *observer) attrs(event configkit.Event) []attribute.KeyValue {
 	attrs := []attribute.KeyValue{
 		attribute.String("configkit.event", string(event.Kind)),
+	}
+	if event.ComponentName != "" {
+		attrs = append(attrs, attribute.String("configkit.component.name", event.ComponentName))
+	}
+	if event.ManagerState != "" {
+		attrs = append(attrs, attribute.String("configkit.manager.state", string(event.ManagerState)))
 	}
 
 	if kind := attemptKind(event); kind != "" {
@@ -237,9 +246,24 @@ func (o *observer) attrs(event configkit.Event) []attribute.KeyValue {
 		}
 	}
 	if event.Apply != nil {
-		attrs = append(attrs, attribute.Bool("configkit.apply.changed", event.Apply.Changed))
+		attrs = append(attrs,
+			attribute.Bool("configkit.apply.published", event.Apply.Published),
+			attribute.Bool("configkit.apply.changed", event.Apply.Changed),
+		)
 	}
 
+	return attrs
+}
+
+func spanAttrs(event configkit.Event, metricAttrs []attribute.KeyValue) []attribute.KeyValue {
+	attrs := append([]attribute.KeyValue(nil), metricAttrs...)
+	attemptID := event.AttemptID
+	if attemptID == 0 && event.Attempt != nil {
+		attemptID = event.Attempt.ID
+	}
+	if attemptID != 0 {
+		attrs = append(attrs, attribute.String("configkit.attempt.id", strconv.FormatUint(attemptID, 10)))
+	}
 	return attrs
 }
 

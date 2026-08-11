@@ -20,10 +20,14 @@ func main() {
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	// SlogObserver logs lifecycle metadata such as event kind, source, attempt
-	// status, stage, checksum, and public failure detail. It does not log raw
-	// typed config or arbitrary returned validation errors.
-	manager := configkit.NewManager[AppConfig](configkit.WithObservers(configkit.SlogObserver(logger)))
+	// SlogObserver logs lifecycle metadata such as component identity, event
+	// kind, manager state, source, attempt status, stage, checksum, apply result,
+	// and public failure detail. It does not log raw typed config or arbitrary
+	// returned validation errors.
+	manager := configkit.NewManager[AppConfig](
+		configkit.WithIdentity("search-config"),
+		configkit.WithObservers(configkit.SlogObserver(logger)),
+	)
 	pipeline := configkit.Pipeline[AppConfig]{
 		Decode: configkit.JSONDecoder[AppConfig](),
 		ValidateConfig: func(ctx context.Context, cfg AppConfig) error {

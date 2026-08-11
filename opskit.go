@@ -25,10 +25,18 @@ func (m *Manager[T]) ComponentInfo() opskit.ComponentInfo {
 	return cloneOpsComponentInfo(managerComponentInfo(m.componentInfo, true))
 }
 
+func (m *Manager[T]) componentName() string {
+	if m.componentInfo.Name != "" {
+		return m.componentInfo.Name
+	}
+	return defaultComponentName
+}
+
 // Status returns this manager's cached lifecycle state as an Opskit status.
 //
 // Status does not read sources, run the pipeline, or expose high-cardinality
 // lifecycle details such as source names, revisions, checksums, or errors.
+// UpdatedAt is the most recent manager apply time when available.
 func (m *Manager[T]) Status(context.Context) opskit.Status {
 	status := m.LifecycleStatus()
 	ready := lifecycleReady(status.State, m.managerDegradedReady())
@@ -240,6 +248,10 @@ func opskitReadinessReason(state LifecycleState, ready bool) string {
 }
 
 func opskitStatusUpdatedAt(status LifecycleStatus) *time.Time {
+	if status.LastApply != nil && !status.LastApply.AppliedAt.IsZero() {
+		updatedAt := status.LastApply.AppliedAt
+		return &updatedAt
+	}
 	if status.LastAttempt != nil && !status.LastAttempt.EndedAt.IsZero() {
 		updatedAt := status.LastAttempt.EndedAt
 		return &updatedAt

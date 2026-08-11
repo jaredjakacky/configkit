@@ -7,9 +7,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 )
 
-// ErrMissingSource is returned when LoadFromSource is called without a Source.
+// ErrMissingSource is returned when LoadFromSource is called with a nil or
+// typed-nil Source.
 var ErrMissingSource = errors.New("configkit: missing source")
 
 // SourceMetadata describes a configuration source without coupling Configkit to
@@ -39,6 +41,20 @@ type SourceMetadata struct {
 type Source interface {
 	Metadata() SourceMetadata
 	Read(ctx context.Context) (SourceData, error)
+}
+
+func isNilSource(source Source) bool {
+	if source == nil {
+		return true
+	}
+
+	value := reflect.ValueOf(source)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 // SourceData is the raw configuration data returned from a configuration source.

@@ -19,6 +19,11 @@ Source read -> Decode -> Apply defaults -> Validate -> Copy -> Redact -> Checksu
 `Source.Metadata` provides safe operational context before reading. `Source.Read`
 returns `SourceData`: raw bytes, metadata, and an optional revision.
 
+Nil and typed-nil `Source` values are both missing. Package-level
+`LoadFromSource` returns `ErrMissingSource` with a `missing_source` failure.
+Once admitted, `Manager.LoadFromSource` records that normal missing-source
+attempt and preserves any last-known-good snapshot.
+
 Source read failures produce a failed `LoadResult` with:
 
 - `AttemptStatusFailed`
@@ -85,7 +90,14 @@ over masked secret values.
 ## Checksum
 
 `Checksum` is required. It computes a stable fingerprint for the effective
-configuration.
+configuration. A Checksummer that returns a nil error must return a non-empty
+string. Configkit does not otherwise prescribe the checksum format.
+
+An empty successful checksum result fails the attempt at
+`AttemptStageChecksum`. The direct caller receives private contract detail,
+while operational output retains the stable `checksum_failed` code and
+`config checksum failed` message. A manager-owned reload preserves any
+last-known-good snapshot normally.
 
 `SHA256JSONChecksum[T]()` hashes the JSON representation of the typed value.
 Checksums are operational fingerprints, not secrecy mechanisms. Avoid exposing
@@ -100,10 +112,14 @@ A successful load creates a `Snapshot[T]` containing:
 - source metadata
 - revision
 - checksum
-- load time
+- load-completion time
 - redacted inspection view
 
 Failed loads do not produce snapshots.
+
+`SnapshotMetadata.LoadedAt` is when the stateless lifecycle successfully
+produced the snapshot. The snapshot may be inspected, approved, or retained
+before a manager publishes it.
 
 ## Manager Apply
 
@@ -119,7 +135,17 @@ attempts preserve the current snapshot and update last failure.
 
 `Manager.Apply` can apply externally produced `LoadResult` values. It validates
 the result before publication and returns `ErrInvalidLoadResult` for malformed
-input.
+input. Successful attempts require a snapshot, matching source and revision,
+matching non-empty checksums, and no failure stage or detail. Failed attempts
+require no snapshot or checksum and a non-empty stage plus non-zero safe public
+failure detail. `NewSnapshot` does not validate metadata itself;
+`Manager.Apply` is the publication boundary.
+
+Every accepted apply records `ApplyResult.AppliedAt`, including a failed result
+that changes lifecycle status without publishing. This is the UTC time when the
+manager committed the state mutation. It is distinct from the historical
+snapshot `LoadedAt` and attempt `EndedAt` times. Opskit `Status.UpdatedAt`
+reports the apply time when available.
 
 `Manager.Apply` records status and attempts. When it publishes a successful
 snapshot, it emits `snapshot_applied`. It does not emit `load_started`,
@@ -128,6 +154,19 @@ the manager-owned `Load` or `LoadFromSource` method.
 
 Manager-owned `Load`, `LoadFromSource`, and `Apply` calls are serialized. Status,
 inspection, snapshot, and value reads remain concurrent.
+
+For manager-owned loads, observer delivery is ordered as follows:
+
+```text
+load_started -> apply manager state -> load_succeeded -> snapshot_applied
+load_started -> record manager failure -> load_failed
+```
+
+The `load_started` event captures pre-attempt manager state. Completion and
+snapshot events capture resulting state and include the `ApplyResult`.
+Synchronous completion observers can therefore use read-only manager APIs and
+see state consistent with the event. Async observers should use the event as
+the event-time view because the manager may have advanced before delivery.
 
 ## Status Transitions
 
@@ -171,9 +210,9 @@ Observer panics are also recovered by the manager. Observers should still return
 quickly because they run synchronously unless wrapped by `AsyncObserver`.
 Synchronous observers must not call `Load`, `LoadFromSource`, or `Apply` on the
 same manager that emitted the event. Read-only calls such as `LifecycleStatus`,
-`LifecycleInspection`, `Snapshot`, and `Value` are acceptable. Use `AsyncObserver` or
-another goroutine for follow-up work that may block or trigger lifecycle
-operations.
+`LifecycleInspection`, `Snapshot`, and `Value` are acceptable and see state
+consistent with the synchronous event boundary. Use `AsyncObserver` or another
+goroutine for follow-up work that may block or trigger lifecycle operations.
 
 ## Context Contract
 

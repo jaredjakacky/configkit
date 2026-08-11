@@ -31,12 +31,18 @@
 // The default attributes are low-cardinality and Kubernetes-friendly:
 //
 //	configkit.event
+//	configkit.component.name
+//	configkit.manager.state
 //	configkit.attempt.kind
 //	configkit.attempt.status
 //	configkit.attempt.stage
 //	configkit.failure.code (failed attempts only)
 //	configkit.source.kind
+//	configkit.apply.published
 //	configkit.apply.changed
+//
+// Spans also include configkit.attempt.id for manager-local correlation. Attempt
+// IDs are excluded from metric attributes because they are unbounded.
 //
 // Source names are excluded by default because they can increase metric
 // cardinality. Use WithSourceName when source names are stable enough for your

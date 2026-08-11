@@ -55,7 +55,10 @@
 //
 // Observers provide lifecycle telemetry hooks, with SlogObserver and
 // AsyncObserver adapters for standard logging and explicit asynchronous
-// delivery.
+// delivery. Manager-emitted events identify their component and capture manager
+// state at the event boundary. Manager state is updated before load completion
+// events are delivered, while asynchronous observers should treat the event as
+// authoritative because later manager reads may observe a newer attempt.
 //
 // The package is storage-neutral and transport-neutral. It does not provide a
 // secrets manager, feature flag system, policy engine, distributed control
