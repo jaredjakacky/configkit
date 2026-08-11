@@ -113,10 +113,12 @@ import configotel "github.com/jaredjakacky/configkit/otel"
 
 ### Dependency model
 
-Configkit intentionally uses one Go module for the root package, optional
+Configkit intentionally publishes one Go module for the root package, optional
 first-party adapters, tests, and runnable examples. This keeps the integrations
 discoverable and versioned with Configkit, so `go.mod` includes dependencies
 used outside the root package, including Servekit, Workerkit, and OpenTelemetry.
+The isolated `tools/releasecheck` module is maintainer tooling and is not a
+separately published Configkit API module.
 
 Go compiles the packages an application imports, not every package in a module.
 An application that imports only `github.com/jaredjakacky/configkit` compiles
@@ -130,9 +132,9 @@ integrations are needed. Configkit does not provide a Workerkit-specific
 adapter package; Workerkit executes `configkit.ReloadCommand` through the
 shared Opskit command contract.
 
-This one-module policy is deliberate before v1. A future integration with a
-substantially heavier dependency graph or an independent release cadence may
-be moved to a separate module, but package-level adapters remain the default.
+This one-published-module policy is deliberate before v1. A future integration
+with a substantially heavier dependency graph or an independent release cadence
+may be moved to a separate module, but package-level adapters remain the default.
 
 ## Quick Start
 
@@ -591,13 +593,17 @@ The canonical symbol-level API documentation lives in Go doc comments so it stay
 
 ## Development
 
-Configkit is a small Go module. The main local verification command is:
+Configkit is a small Go project. The main local verification command is:
 
 ```bash
 make verify
 ```
 
-`make verify` checks formatting, runs `go vet`, runs tests, builds examples, and verifies that `go.mod` and `go.sum` are tidy.
+`make verify` checks formatting, enforces the root dependency boundary, runs
+`go vet`, runs tests, builds examples, and verifies that every checked-in Go
+module is tidy. Module-aware verification runs with Go workspace discovery
+disabled so local sibling checkouts cannot replace the versions recorded in
+Configkit's module graph.
 
 For changes that affect concurrency, manager state, observers, reload behavior, or adapter code, also run:
 
@@ -611,39 +617,23 @@ For dependency or security-sensitive changes, run:
 make govulncheck
 ```
 
-CI runs verification and race tests on the supported Go versions. Release tags are gated by those jobs plus `govulncheck` before publishing.
+CI runs verification and race tests on the supported Go versions. The release
+workflow independently runs those jobs plus `govulncheck` before creating a
+release tag.
 
 ### Releases
 
-Prepare releases from a committed `main` revision that has been pushed to the
-remote. Before creating the tag, run the complete pre-release suite with one
-command:
+Releases start from the repository's **Actions → Release → Run workflow**
+screen. Select `main` and enter the semantic version to release, such as
+`v0.9.0` or `v1.0.0-rc.1`. The workflow validates the version against
+Configkit's module path and runs `make verify`, `make test-race`, and
+`make govulncheck` against the exact selected commit on every supported Go
+version. Only after all checks pass does it create the version tag and GitHub
+Release. Canonical Go module prerelease versions are marked as prereleases in
+GitHub.
 
-```bash
-make release-check
-```
-
-`release-check` requires network access and fails unless:
-
-- the checkout is attached to `main`
-- the working tree has no staged, unstaged, or non-ignored untracked files
-- `origin/main` can be refreshed
-- `HEAD` exactly matches the refreshed `origin/main`
-
-The command validates that commit in a temporary detached Git worktree with Go
-workspace discovery disabled. Local ignored files, caches, and parent
-`go.work` files therefore cannot alter the tree under test. It runs `verify`,
-`test-race`, and `govulncheck`, checks that validation did not modify the
-detached worktree, and then repeats the branch, cleanliness, and remote-tip
-checks in the original checkout.
-
-After the command succeeds, create and push a stable `v0.x.y` or `v1.x.y` tag
-without changing the checkout. If `main` advances or local state changes before
-tagging, rerun `make release-check`. The release workflow validates that the tag
-has the expected Go module version form and points to a commit on the `main`
-release line. It then independently reruns `verify`, `test-race`, and
-`govulncheck` on every supported Go version before publishing the GitHub
-Release.
+Do not create or push `v*` tags manually; doing so would publish a Go module
+version without the release workflow's pre-publication checks.
 
 ## Issues and Scope
 
