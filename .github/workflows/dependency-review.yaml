@@ -9,6 +9,7 @@ permissions:
 
 jobs:
   dependency-review:
+    name: Dependency Review
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -18,4 +19,3 @@ jobs:
         uses: actions/dependency-review-action@v5.0.0
         with:
           fail-on-severity: high
-
