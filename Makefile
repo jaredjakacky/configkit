@@ -10,7 +10,7 @@ PKGS ?= ./...
 COVER_PKGS ?= $(shell $(GO_MODULE) list $(PKGS) | grep -v '/examples')
 GOFILES := $(filter-out $(shell git ls-files --deleted -- '*.go'),$(shell git ls-files -- '*.go'))
 EXAMPLE_PKGS ?= $(shell $(GO_MODULE) list ./examples/...)
-GOVULNCHECK_VERSION ?= v1.6.0
+GOVULNCHECK_VERSION ?= v1.7.0
 RELEASE_CHECK_DIR := tools/releasecheck
 
 # Keep build cache inside the repo so local runs are reproducible and do not
